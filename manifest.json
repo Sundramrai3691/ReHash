@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "ReviseMate",
+  "version": "1.0.0",
+  "description": "Spaced repetition system for LeetCode and Codeforces problems",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://leetcode.com/*",
+    "https://codeforces.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ReviseMate"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.com/problems/*"],
+      "js": ["content-leetcode.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://codeforces.com/problemset/problem/*",
+        "https://codeforces.com/contest/*/problem/*"
+      ],
+      "js": ["content-codeforces.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
