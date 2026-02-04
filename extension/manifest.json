@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "ReviseMate",
+  "name": "ReHash",
   "version": "1.0.0",
   "description": "Spaced repetition system for LeetCode and Codeforces problems",
   "permissions": [
@@ -19,7 +19,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "ReviseMate"
+    "default_title": "ReHash"
   },
   "content_scripts": [
     {

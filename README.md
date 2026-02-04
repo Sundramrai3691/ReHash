@@ -1,4 +1,4 @@
-# ReviseMate - Chrome Extension
+# ReHash - Chrome Extension
 
 A minimal spaced repetition system for LeetCode and Codeforces problems.
 
@@ -8,12 +8,12 @@ A minimal spaced repetition system for LeetCode and Codeforces problems.
 2. Enable **Developer mode** (toggle in top-right corner)
 3. Click **Load unpacked**
 4. Select the folder containing these extension files
-5. The ReviseMate extension should now appear in your extensions list
+5. The ReHash extension should now appear in your extensions list
 
 ## Usage
 
 1. Navigate to a LeetCode or Codeforces problem page
-2. Click the ReviseMate extension icon in your toolbar
+2. Click the ReHash extension icon in your toolbar
 3. Click **Save to Revision** to add the problem
 4. View problems due today in the **Today** tab
 5. Mark problems as **Revised** to advance them in the SRS schedule
@@ -26,6 +26,7 @@ A minimal spaced repetition system for LeetCode and Codeforces problems.
 Default intervals: `[1, 2, 3, 7, 14]` days
 
 To customize:
+
 1. Click **Settings** in the extension popup
 2. Enter comma-separated days (e.g., `1,3,7,14,30`)
 3. Click **Save Settings**
@@ -35,6 +36,7 @@ To customize:
 Default: 19:00 (7 PM)
 
 To change:
+
 1. Click **Settings** in the extension popup
 2. Enter hour in 24-hour format (0-23)
 3. Click **Save Settings**
@@ -65,5 +67,6 @@ All data is stored locally in `chrome.storage.local` under the key `revise_mate_
 ## Support
 
 Supports:
+
 - LeetCode: `https://leetcode.com/problems/*`
 - Codeforces: `https://codeforces.com/problemset/problem/*` and `https://codeforces.com/contest/*/problem/*`

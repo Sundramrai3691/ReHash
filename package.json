@@ -1,8 +1,0 @@
-{
-  "name": "revise-mate",
-  "version": "1.0.0",
-  "description": "Chrome extension for spaced repetition of coding problems",
-  "scripts": {
-    "build": "node validate.js"
-  }
-}
