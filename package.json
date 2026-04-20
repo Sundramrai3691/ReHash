@@ -1,0 +1,12 @@
+{
+  "name": "rehash-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local build, preview, and test workflow for the ReHash browser extension",
+  "scripts": {
+    "test": "node --test --test-isolation=none",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve-local-preview.mjs",
+    "check": "npm run test && npm run build"
+  }
+}

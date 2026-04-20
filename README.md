@@ -2,13 +2,38 @@
 
 A minimal spaced repetition system for LeetCode and Codeforces problems.
 
+## Local Workflow
+
+This repo now includes a zero-dependency local workflow so you can test the project without manually guessing what broke.
+
+### Available Commands
+
+- `npm test` - runs local smoke tests against the extension logic and manifest references
+- `npm run build` - validates the extension and stages a loadable bundle in `dist/rehash-extension`
+- `npm run preview` - starts a local server for a popup-only preview at `http://127.0.0.1:4173/local/popup-preview.html`
+- `npm run check` - runs both tests and the build
+
+### What Each Flow Covers
+
+- `npm run preview` is for quick local UI checks using a mocked Chrome API and seeded sample data
+- `npm run build` is for preparing the folder you can load in `chrome://extensions`
+- Loading the unpacked bundle in Chrome is still the real end-to-end test for content scripts, alarms, notifications, and tab APIs
+
 ## Installation
 
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable **Developer mode** (toggle in top-right corner)
 3. Click **Load unpacked**
-4. Select the folder containing these extension files
+4. Select the `dist/rehash-extension` folder after running `npm run build`
 5. The ReHash extension should now appear in your extensions list
+
+## Local Testing Checklist
+
+1. Run `npm run check`
+2. Run `npm run preview` and verify the popup UI works with sample data
+3. Run `npm run build`
+4. Load `dist/rehash-extension` in Chrome
+5. Open a LeetCode or Codeforces problem page and test save, revise, notes, stats, and export flows
 
 ## Usage
 
