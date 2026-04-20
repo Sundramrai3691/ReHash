@@ -1,10 +1,18 @@
+const DEFAULT_NOTION_URL = 'https://www.notion.so';
+
 let currentProblems = {};
 let currentExtractedProblem = null;
 let currentEditingId = null;
+let currentSolvedSessions = [];
+let activeTagFilter = 'All';
+let currentSearchTerm = '';
+let notionSaveTimeout = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   initializeTabs();
-  loadProblems();
+  initializeFilters();
+  initializeSettingsInputs();
+  loadPopupData();
   tryExtractProblem();
 
   document.getElementById('saveBtn').addEventListener('click', saveExtractedProblem);
@@ -19,10 +27,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function initializeTabs() {
   const tabBtns = document.querySelectorAll('.tab-btn');
-  tabBtns.forEach(btn => {
+  tabBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
-      tabBtns.forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      tabBtns.forEach((tabBtn) => tabBtn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach((content) => content.classList.remove('active'));
 
       btn.classList.add('active');
       const tab = btn.dataset.tab;
@@ -31,12 +39,48 @@ function initializeTabs() {
   });
 }
 
+function initializeFilters() {
+  document.getElementById('problemSearchInput').addEventListener('input', (event) => {
+    currentSearchTerm = event.target.value.trim().toLowerCase();
+    renderAllList();
+  });
+}
+
+function initializeSettingsInputs() {
+  const notionInput = document.getElementById('notionUrlInput');
+  notionInput.addEventListener('input', () => {
+    window.clearTimeout(notionSaveTimeout);
+    notionSaveTimeout = window.setTimeout(async () => {
+      const notionUrl = notionInput.value.trim() || DEFAULT_NOTION_URL;
+      await chrome.storage.local.set({ notionUrl });
+      if (notionInput.value.trim() === '') {
+        notionInput.value = DEFAULT_NOTION_URL;
+      }
+    }, 350);
+  });
+}
+
+async function loadPopupData() {
+  await Promise.all([loadProblems(), loadSolvedSessions(), loadNotionUrl()]);
+}
+
 async function loadProblems() {
   const response = await chrome.runtime.sendMessage({ action: 'get_all_problems' });
   currentProblems = response || {};
   renderTodayList();
   renderAllList();
   updateProgress();
+}
+
+async function loadSolvedSessions() {
+  const data = await chrome.storage.local.get('solvedSessions');
+  currentSolvedSessions = Array.isArray(data.solvedSessions) ? data.solvedSessions : [];
+  renderStats();
+}
+
+async function loadNotionUrl() {
+  const data = await chrome.storage.local.get('notionUrl');
+  document.getElementById('notionUrlInput').value = data.notionUrl || DEFAULT_NOTION_URL;
 }
 
 function renderTodayList() {
@@ -51,34 +95,42 @@ function renderTodayList() {
   }
 
   todayEmpty.style.display = 'none';
-  todayList.innerHTML = todayProblems.map(p => renderProblemCard(p, true)).join('');
-  attachEventListeners();
+  todayList.innerHTML = todayProblems.map((problem) => renderProblemCard(problem)).join('');
+  attachProblemEventListeners(todayList);
 }
 
 function renderAllList() {
   const allList = document.getElementById('allList');
   const allEmpty = document.getElementById('allEmpty');
-  const allProblems = Object.values(currentProblems);
+  const filteredProblems = getFilteredProblems();
 
-  if (allProblems.length === 0) {
+  renderTagFilters();
+
+  if (filteredProblems.length === 0) {
     allList.innerHTML = '';
     allEmpty.style.display = 'block';
+    allEmpty.textContent = Object.keys(currentProblems).length === 0
+      ? 'No problems saved yet.'
+      : 'No problems match the current filters.';
     return;
   }
 
   allEmpty.style.display = 'none';
-  allList.innerHTML = allProblems
+  allList.innerHTML = filteredProblems
     .sort((a, b) => (a.nextReviewAt || Infinity) - (b.nextReviewAt || Infinity))
-    .map(p => renderProblemCard(p, false))
+    .map((problem) => renderProblemCard(problem))
     .join('');
-  attachEventListeners();
+  attachProblemEventListeners(allList);
 }
 
-function renderProblemCard(problem, isToday) {
-  const difficultyClass = problem.difficulty.toLowerCase();
-  const reviewDate = problem.completed ? 'Completed' :
-    problem.nextReviewAt ? formatDate(problem.nextReviewAt) : 'N/A';
-  const topics = problem.topics.slice(0, 3).join(', ') || 'None';
+function renderProblemCard(problem) {
+  const difficultyClass = getDifficultyClass(problem.difficulty);
+  const reviewDate = problem.completed
+    ? 'Completed'
+    : problem.nextReviewAt
+      ? formatDate(problem.nextReviewAt)
+      : 'N/A';
+  const topics = Array.isArray(problem.topics) ? problem.topics.slice(0, 3).join(', ') : '';
 
   return `
     <div class="problem-card" data-id="${problem.id}">
@@ -87,11 +139,11 @@ function renderProblemCard(problem, isToday) {
         <span class="problem-site">${problem.site}</span>
       </div>
       <div class="problem-meta">
-        <span class="difficulty ${difficultyClass}">${problem.difficulty}</span>
+        <span class="difficulty ${difficultyClass}">${problem.difficulty || 'Unknown'}</span>
         <span class="bucket">Bucket ${problem.bucketIndex}</span>
         <span class="review-date">${reviewDate}</span>
       </div>
-      <div class="problem-topics">${topics}</div>
+      <div class="problem-topics">${topics || 'None'}</div>
       ${problem.notes ? `<div class="problem-notes">${problem.notes}</div>` : ''}
       <div class="problem-actions">
         ${!problem.completed ? `<button class="btn-sm btn-revised" data-id="${problem.id}">Mark Revised</button>` : ''}
@@ -103,20 +155,109 @@ function renderProblemCard(problem, isToday) {
   `;
 }
 
-function attachEventListeners() {
-  document.querySelectorAll('.btn-revised').forEach(btn => {
+function renderTagFilters() {
+  const filterBar = document.getElementById('tagFilterBar');
+  const tags = getAllUniqueTags();
+  if (activeTagFilter !== 'All' && !tags.includes(activeTagFilter)) {
+    activeTagFilter = 'All';
+  }
+  const buttons = ['All', ...tags]
+    .map((tag) => `
+      <button
+        class="filter-chip ${tag === activeTagFilter ? 'active' : ''}"
+        data-tag="${escapeAttribute(tag)}"
+      >
+        ${tag}
+      </button>
+    `)
+    .join('');
+
+  filterBar.innerHTML = buttons;
+
+  filterBar.querySelectorAll('.filter-chip').forEach((button) => {
+    button.addEventListener('click', () => {
+      activeTagFilter = button.dataset.tag;
+      renderAllList();
+    });
+  });
+}
+
+function renderStats() {
+  const totalSolved = currentSolvedSessions.length;
+  const weekCount = getThisWeekCount();
+  const averageTime = totalSolved === 0
+    ? '0m 0s'
+    : formatDuration(Math.round(currentSolvedSessions.reduce((sum, session) => sum + (session.timeTaken || 0), 0) / totalSolved));
+  const streak = calculateStreak();
+  const notionRate = totalSolved === 0
+    ? '0%'
+    : `${Math.round((currentSolvedSessions.filter((session) => session.notionOpened).length / totalSolved) * 100)}%`;
+
+  document.getElementById('statsTotalSolved').textContent = String(totalSolved);
+  document.getElementById('statsWeekCount').textContent = String(weekCount);
+  document.getElementById('statsAverageTime').textContent = averageTime;
+  document.getElementById('statsStreak').textContent = `${streak} day${streak === 1 ? '' : 's'}`;
+  document.getElementById('statsNotionRate').textContent = notionRate;
+
+  renderSlowestTopics();
+  renderTopicBreakdown();
+}
+
+function renderSlowestTopics() {
+  const container = document.getElementById('slowestTopics');
+  const averages = getTopicAverageTimes()
+    .sort((a, b) => b.averageTime - a.averageTime)
+    .slice(0, 3);
+
+  if (averages.length === 0) {
+    container.innerHTML = '<p class="stats-empty">No solve data yet.</p>';
+    return;
+  }
+
+  container.innerHTML = averages
+    .map((item) => `<div class="stats-row"><span>${item.tag}</span><strong>${formatDuration(Math.round(item.averageTime))}</strong></div>`)
+    .join('');
+}
+
+function renderTopicBreakdown() {
+  const container = document.getElementById('topicBreakdown');
+  const breakdown = getTopicCounts();
+  const rows = Object.entries(breakdown).sort((a, b) => b[1] - a[1]);
+
+  if (rows.length === 0) {
+    container.innerHTML = '<p class="stats-empty">No topics logged yet.</p>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="stats-table">
+      <thead>
+        <tr>
+          <th>Topic</th>
+          <th>Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(([tag, count]) => `<tr><td>${tag}</td><td>${count}</td></tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function attachProblemEventListeners(container) {
+  container.querySelectorAll('.btn-revised').forEach((btn) => {
     btn.addEventListener('click', () => markRevised(btn.dataset.id));
   });
 
-  document.querySelectorAll('.btn-move').forEach(btn => {
+  container.querySelectorAll('.btn-move').forEach((btn) => {
     btn.addEventListener('click', () => moveBucket(btn.dataset.id));
   });
 
-  document.querySelectorAll('.btn-notes').forEach(btn => {
+  container.querySelectorAll('.btn-notes').forEach((btn) => {
     btn.addEventListener('click', () => openNotesModal(btn.dataset.id));
   });
 
-  document.querySelectorAll('.btn-delete').forEach(btn => {
+  container.querySelectorAll('.btn-delete').forEach((btn) => {
     btn.addEventListener('click', () => deleteProblem(btn.dataset.id));
   });
 }
@@ -125,12 +266,31 @@ function getTodayProblems() {
   const todayStart = getStartOfDay();
   const todayEnd = getEndOfDay();
 
-  return Object.values(currentProblems).filter(p =>
-    !p.completed &&
-    p.nextReviewAt &&
-    p.nextReviewAt >= todayStart &&
-    p.nextReviewAt <= todayEnd
+  return Object.values(currentProblems).filter((problem) =>
+    !problem.completed &&
+    problem.nextReviewAt &&
+    problem.nextReviewAt >= todayStart &&
+    problem.nextReviewAt <= todayEnd
   );
+}
+
+function getFilteredProblems() {
+  return Object.values(currentProblems).filter((problem) => {
+    const topicMatches = activeTagFilter === 'All' ||
+      (Array.isArray(problem.topics) && problem.topics.includes(activeTagFilter));
+    const searchMatches = currentSearchTerm === '' ||
+      problem.title.toLowerCase().includes(currentSearchTerm);
+
+    return topicMatches && searchMatches;
+  });
+}
+
+function getAllUniqueTags() {
+  return Array.from(
+    new Set(
+      Object.values(currentProblems).flatMap((problem) => Array.isArray(problem.topics) ? problem.topics : [])
+    )
+  ).sort((a, b) => a.localeCompare(b));
 }
 
 function updateProgress() {
@@ -144,8 +304,8 @@ function updateProgress() {
   }
 
   const todayStart = getStartOfDay();
-  const revised = todayProblems.filter(p => {
-    const lastRevision = p.history.findLast(h => h.action === 'revised');
+  const revised = todayProblems.filter((problem) => {
+    const lastRevision = problem.history.findLast((historyItem) => historyItem.action === 'revised');
     return lastRevision && lastRevision.date >= todayStart;
   }).length;
 
@@ -161,7 +321,7 @@ async function tryExtractProblem() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (!tab || !tab.url || !(tab.url.includes('leetcode.com') || tab.url.includes('codeforces.com'))) {
+    if (!tab || !tab.url || !isSupportedProblemUrl(tab.url)) {
       extractStatus.textContent = 'Not on a LeetCode or Codeforces problem page.';
       return;
     }
@@ -190,13 +350,12 @@ async function saveExtractedProblem() {
 
   const response = await chrome.runtime.sendMessage({
     action: 'save_problem',
-    problem: currentExtractedProblem
+    problem: currentExtractedProblem,
   });
 
   if (response.success) {
     showToast('Problem saved successfully!');
     await loadProblems();
-
     document.querySelector('[data-tab="today"]').click();
   }
 }
@@ -205,7 +364,10 @@ async function saveManualProblem() {
   const title = document.getElementById('manualTitle').value.trim();
   const url = document.getElementById('manualUrl').value.trim();
   const site = document.getElementById('manualSite').value;
-  const tags = document.getElementById('manualTags').value.split(',').map(t => t.trim()).filter(Boolean);
+  const tags = document.getElementById('manualTags').value
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
 
   if (!title || !url) {
     showToast('Please enter both title and URL');
@@ -214,7 +376,7 @@ async function saveManualProblem() {
 
   const response = await chrome.runtime.sendMessage({
     action: 'save_problem',
-    problem: { title, url, site, tags, difficulty: 'Unknown' }
+    problem: { title, url, site, tags, difficulty: 'Unknown' },
   });
 
   if (response.success) {
@@ -223,7 +385,6 @@ async function saveManualProblem() {
     document.getElementById('manualUrl').value = '';
     document.getElementById('manualTags').value = '';
     await loadProblems();
-
     document.querySelector('[data-tab="today"]').click();
   }
 }
@@ -241,8 +402,8 @@ async function moveBucket(problemId) {
 
   if (newBucket === null) return;
 
-  const bucketIndex = parseInt(newBucket);
-  if (isNaN(bucketIndex) || bucketIndex < 0 || bucketIndex > maxBucket) {
+  const bucketIndex = parseInt(newBucket, 10);
+  if (Number.isNaN(bucketIndex) || bucketIndex < 0 || bucketIndex > maxBucket) {
     showToast('Invalid bucket index');
     return;
   }
@@ -269,7 +430,7 @@ async function saveNotes() {
   await chrome.runtime.sendMessage({
     action: 'update_notes',
     problemId: currentEditingId,
-    notes
+    notes,
   });
   await loadProblems();
   closeNotesModal();
@@ -286,8 +447,11 @@ async function deleteProblem(problemId) {
 
 async function openSettings() {
   const settings = await chrome.runtime.sendMessage({ action: 'get_settings' });
+  const notionData = await chrome.storage.local.get('notionUrl');
+
   document.getElementById('intervalsInput').value = settings.intervals.join(',');
   document.getElementById('reminderHourInput').value = settings.reminderHour;
+  document.getElementById('notionUrlInput').value = notionData.notionUrl || DEFAULT_NOTION_URL;
   document.getElementById('settingsModal').style.display = 'flex';
 }
 
@@ -297,18 +461,20 @@ function closeSettingsModal() {
 
 async function saveSettings() {
   const intervalsStr = document.getElementById('intervalsInput').value;
-  const reminderHour = parseInt(document.getElementById('reminderHourInput').value);
+  const reminderHour = parseInt(document.getElementById('reminderHourInput').value, 10);
+  const intervals = intervalsStr
+    .split(',')
+    .map((value) => parseInt(value.trim(), 10))
+    .filter((value) => !Number.isNaN(value) && value > 0);
 
-  const intervals = intervalsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0);
-
-  if (intervals.length === 0 || isNaN(reminderHour) || reminderHour < 0 || reminderHour > 23) {
+  if (intervals.length === 0 || Number.isNaN(reminderHour) || reminderHour < 0 || reminderHour > 23) {
     showToast('Invalid settings');
     return;
   }
 
   await chrome.runtime.sendMessage({
     action: 'update_settings',
-    settings: { intervals, reminderHour }
+    settings: { intervals, reminderHour },
   });
 
   closeSettingsModal();
@@ -323,21 +489,21 @@ function exportCSV() {
   }
 
   const headers = ['Title', 'URL', 'Site', 'Difficulty', 'Topics', 'Bucket', 'Next Review', 'Completed', 'Notes', 'Added At'];
-  const rows = problems.map(p => [
-    p.title,
-    p.url,
-    p.site,
-    p.difficulty,
-    p.topics.join('; '),
-    p.bucketIndex,
-    p.nextReviewAt ? formatDate(p.nextReviewAt) : 'N/A',
-    p.completed ? 'Yes' : 'No',
-    p.notes.replace(/"/g, '""'),
-    formatDate(p.addedAt)
+  const rows = problems.map((problem) => [
+    problem.title,
+    problem.url,
+    problem.site,
+    problem.difficulty,
+    (problem.topics || []).join('; '),
+    problem.bucketIndex,
+    problem.nextReviewAt ? formatDate(problem.nextReviewAt) : 'N/A',
+    problem.completed ? 'Yes' : 'No',
+    (problem.notes || '').replace(/"/g, '""'),
+    formatDate(problem.addedAt),
   ]);
 
   const csv = [headers, ...rows]
-    .map(row => row.map(cell => `"${cell}"`).join(','))
+    .map((row) => row.map((cell) => `"${cell}"`).join(','))
     .join('\n');
 
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -351,13 +517,104 @@ function exportCSV() {
   showToast('CSV exported!');
 }
 
+function getThisWeekCount() {
+  const now = new Date();
+  const startOfWeek = new Date(now);
+  const day = startOfWeek.getDay();
+  const diff = day === 0 ? 6 : day - 1;
+  startOfWeek.setDate(startOfWeek.getDate() - diff);
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  return currentSolvedSessions.filter((session) => new Date(session.date) >= startOfWeek).length;
+}
+
+function getTopicCounts() {
+  return currentSolvedSessions.reduce((accumulator, session) => {
+    const uniqueTags = new Set(Array.isArray(session.tags) ? session.tags : []);
+    uniqueTags.forEach((tag) => {
+      accumulator[tag] = (accumulator[tag] || 0) + 1;
+    });
+    return accumulator;
+  }, {});
+}
+
+function getTopicAverageTimes() {
+  const topicTimes = {};
+
+  currentSolvedSessions.forEach((session) => {
+    const uniqueTags = new Set(Array.isArray(session.tags) ? session.tags : []);
+    uniqueTags.forEach((tag) => {
+      if (!topicTimes[tag]) {
+        topicTimes[tag] = { total: 0, count: 0 };
+      }
+
+      topicTimes[tag].total += session.timeTaken || 0;
+      topicTimes[tag].count += 1;
+    });
+  });
+
+  return Object.entries(topicTimes).map(([tag, value]) => ({
+    averageTime: value.total / value.count,
+    tag,
+  }));
+}
+
+function calculateStreak() {
+  const uniqueDays = Array.from(
+    new Set(currentSolvedSessions.map((session) => new Date(session.date).toISOString().slice(0, 10)))
+  ).sort();
+
+  if (uniqueDays.length === 0) {
+    return 0;
+  }
+
+  let streak = 1;
+  let currentDate = new Date(uniqueDays[uniqueDays.length - 1]);
+
+  for (let index = uniqueDays.length - 2; index >= 0; index--) {
+    const previousDate = new Date(uniqueDays[index]);
+    const diffDays = Math.round((currentDate - previousDate) / (24 * 60 * 60 * 1000));
+    if (diffDays === 1) {
+      streak += 1;
+      currentDate = previousDate;
+    } else if (diffDays > 1) {
+      break;
+    }
+  }
+
+  return streak;
+}
+
+function getDifficultyClass(difficulty) {
+  const normalized = String(difficulty || 'Unknown').toLowerCase();
+  if (normalized.includes('easy')) return 'easy';
+  if (normalized.includes('medium')) return 'medium';
+  if (normalized.includes('hard')) return 'hard';
+  if (/^\d+$/.test(normalized)) return 'rating';
+  return 'unknown';
+}
+
+function isSupportedProblemUrl(url) {
+  return (
+    /^https:\/\/leetcode\.com\/problems\//.test(url) ||
+    /^https:\/\/codeforces\.com\/problemset\/problem\//.test(url) ||
+    /^https:\/\/codeforces\.com\/contest\/\d+\/problem\//.test(url)
+  );
+}
+
+function formatDuration(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
 function formatDate(timestamp) {
   return new Date(timestamp).toLocaleDateString();
 }
 
 function formatDateFile(timestamp) {
-  const d = new Date(timestamp);
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function getStartOfDay(timestamp = Date.now()) {
@@ -370,6 +627,10 @@ function getEndOfDay(timestamp = Date.now()) {
   const date = new Date(timestamp);
   date.setHours(23, 59, 59, 999);
   return date.getTime();
+}
+
+function escapeAttribute(value) {
+  return String(value).replace(/"/g, '&quot;');
 }
 
 function showToast(message) {

@@ -7,6 +7,7 @@
     "storage",
     "alarms",
     "notifications",
+    "tabs",
     "activeTab",
     "scripting"
   ],
@@ -28,10 +29,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://codeforces.com/problemset/problem/*",
-        "https://codeforces.com/contest/*/problem/*"
-      ],
+      "matches": ["https://codeforces.com/*"],
       "js": ["content-codeforces.js"],
       "run_at": "document_idle"
     }

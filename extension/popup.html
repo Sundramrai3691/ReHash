@@ -20,6 +20,7 @@
         <button class="tab-btn active" data-tab="today">Today</button>
         <button class="tab-btn" data-tab="all">All Problems</button>
         <button class="tab-btn" data-tab="add">Add/Save</button>
+        <button class="tab-btn" data-tab="stats">Stats</button>
       </nav>
 
       <main>
@@ -31,6 +32,15 @@
         </section>
 
         <section class="tab-content" id="allTab">
+          <div class="filter-bar">
+            <input
+              type="text"
+              id="problemSearchInput"
+              placeholder="Search by problem title"
+              class="input search-input"
+            />
+            <div id="tagFilterBar" class="tag-filter-bar"></div>
+          </div>
           <div id="allList" class="problem-list"></div>
           <p class="empty-state" id="allEmpty" style="display: none">
             No problems saved yet.
@@ -84,6 +94,39 @@
             </button>
           </div>
         </section>
+
+        <section class="tab-content" id="statsTab">
+          <div id="statsGrid" class="stats-grid">
+            <div class="stat-card">
+              <h3>Total Problems Solved</h3>
+              <p class="stat-value" id="statsTotalSolved">0</p>
+            </div>
+            <div class="stat-card">
+              <h3>This Week</h3>
+              <p class="stat-value" id="statsWeekCount">0</p>
+            </div>
+            <div class="stat-card">
+              <h3>Average Time</h3>
+              <p class="stat-value" id="statsAverageTime">0m 0s</p>
+            </div>
+            <div class="stat-card">
+              <h3>Streak</h3>
+              <p class="stat-value" id="statsStreak">0 days</p>
+            </div>
+            <div class="stat-card">
+              <h3>Notion Logging Rate</h3>
+              <p class="stat-value" id="statsNotionRate">0%</p>
+            </div>
+            <div class="stat-card stat-card-wide">
+              <h3>Slowest Topics</h3>
+              <div id="slowestTopics" class="stats-list"></div>
+            </div>
+            <div class="stat-card stat-card-wide">
+              <h3>Topic Breakdown</h3>
+              <div id="topicBreakdown" class="table-wrap"></div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <footer>
@@ -121,6 +164,13 @@
           min="0"
           max="23"
           placeholder="19"
+        />
+        <label>Notion Log URL:</label>
+        <input
+          type="text"
+          id="notionUrlInput"
+          class="input"
+          placeholder="Paste your Notion database URL here"
         />
         <div class="modal-actions">
           <button class="btn btn-primary" id="saveSettingsBtn">

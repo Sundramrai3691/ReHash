@@ -1,5 +1,6 @@
 const DEFAULT_INTERVALS = [1, 2, 3, 7, 14];
 const DEFAULT_REMINDER_HOUR = 19;
+const DEFAULT_NOTION_URL = "https://www.notion.so";
 
 chrome.runtime.onInstalled.addListener(() => {
   initializeSettings();
@@ -7,6 +8,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  initializeSettings();
   scheduleNextAlarm();
 });
 
@@ -53,10 +55,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+  if (request.action === "SAVE_SESSION") {
+    saveSolvedSession(request.session).then(sendResponse);
+    return true;
+  }
+  if (request.action === "GET_NOTION_URL") {
+    getNotionUrl().then((notionUrl) => sendResponse({ notionUrl }));
+    return true;
+  }
+  if (request.action === "OPEN_NOTION_URL") {
+    openNotionUrl(request.url).then(sendResponse);
+    return true;
+  }
 });
 
 async function initializeSettings() {
-  const data = await chrome.storage.local.get("revise_mate_data");
+  const data = await chrome.storage.local.get(["revise_mate_data", "solvedSessions", "notionUrl"]);
   if (!data.revise_mate_data) {
     await chrome.storage.local.set({
       revise_mate_data: {
@@ -67,6 +81,20 @@ async function initializeSettings() {
         },
       },
     });
+  }
+
+  const updates = {};
+
+  if (!Array.isArray(data.solvedSessions)) {
+    updates.solvedSessions = [];
+  }
+
+  if (typeof data.notionUrl !== "string" || !data.notionUrl.trim()) {
+    updates.notionUrl = DEFAULT_NOTION_URL;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await chrome.storage.local.set(updates);
   }
 }
 
@@ -80,11 +108,39 @@ async function getSettings() {
   );
 }
 
+async function getNotionUrl() {
+  const data = await chrome.storage.local.get("notionUrl");
+  return (data.notionUrl || DEFAULT_NOTION_URL).trim() || DEFAULT_NOTION_URL;
+}
+
 async function updateSettings(settings) {
   const data = await chrome.storage.local.get("revise_mate_data");
   const current = data.revise_mate_data || { problems: {}, settings: {} };
   current.settings = { ...current.settings, ...settings };
   await chrome.storage.local.set({ revise_mate_data: current });
+}
+
+async function saveSolvedSession(session) {
+  if (!session || !session.problemTitle || !session.url) {
+    return { success: false };
+  }
+
+  const data = await chrome.storage.local.get("solvedSessions");
+  const solvedSessions = Array.isArray(data.solvedSessions) ? data.solvedSessions : [];
+
+  solvedSessions.push({
+    problemTitle: session.problemTitle,
+    url: session.url,
+    site: session.site || "unknown",
+    tags: Array.isArray(session.tags) ? session.tags : [],
+    timeTaken: Number.isFinite(session.timeTaken) ? session.timeTaken : 0,
+    note: session.note || "",
+    date: session.date || new Date().toISOString(),
+    notionOpened: Boolean(session.notionOpened),
+  });
+
+  await chrome.storage.local.set({ solvedSessions });
+  return { success: true };
 }
 
 async function getAllProblems() {
@@ -189,6 +245,12 @@ async function deleteProblem(problemId) {
   delete store.problems[problemId];
   await chrome.storage.local.set({ revise_mate_data: store });
   return { success: true };
+}
+
+async function openNotionUrl(url) {
+  const notionUrl = typeof url === "string" && url.trim() ? url.trim() : await getNotionUrl();
+  await chrome.tabs.create({ url: notionUrl });
+  return { success: true, url: notionUrl };
 }
 
 function generateId(site, url) {
