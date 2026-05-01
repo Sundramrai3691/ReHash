@@ -383,11 +383,22 @@ function injectTimerWidget() {
     void toggleWidgetLayout();
   });
 
-  initializeWidgetDragging(host, shadow.getElementById("rehash-drag-grip"));
+  initializeWidgetDragging(
+    host,
+    shadow.getElementById("rehash-widget-shell"),
+    shadow.getElementById("rehash-drag-grip"),
+  );
 }
 
-function initializeWidgetDragging(host, handle) {
-  handle.addEventListener("pointerdown", (event) => {
+function initializeWidgetDragging(host, widgetShell, dragGrip) {
+  const startDrag = (event) => {
+    const isGrip = event.target === dragGrip || dragGrip.contains(event.target);
+    const interactiveTarget = event.target.closest("button, input, textarea, select, a, label");
+
+    if (!isGrip && interactiveTarget) {
+      return;
+    }
+
     const rect = host.getBoundingClientRect();
     host.style.left = `${rect.left}px`;
     host.style.top = `${rect.top}px`;
@@ -400,11 +411,13 @@ function initializeWidgetDragging(host, handle) {
       pointerId: event.pointerId,
     };
 
-    handle.setPointerCapture(event.pointerId);
+    widgetShell.setPointerCapture(event.pointerId);
     event.preventDefault();
-  });
+  };
 
-  handle.addEventListener("pointermove", (event) => {
+  widgetShell.addEventListener("pointerdown", startDrag);
+
+  widgetShell.addEventListener("pointermove", (event) => {
     if (!rehashState.dragSession || rehashState.dragSession.pointerId !== event.pointerId) {
       return;
     }
@@ -424,12 +437,12 @@ function initializeWidgetDragging(host, handle) {
     host.style.top = `${top}px`;
   });
 
-  handle.addEventListener("pointerup", () => {
+  widgetShell.addEventListener("pointerup", () => {
     void saveWidgetPosition(host);
     rehashState.dragSession = null;
   });
 
-  handle.addEventListener("pointercancel", () => {
+  widgetShell.addEventListener("pointercancel", () => {
     void saveWidgetPosition(host);
     rehashState.dragSession = null;
   });
