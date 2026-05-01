@@ -3,6 +3,7 @@ const REHASH_WIDGET_HOST_ID = "rehash-timer-host";
 const REHASH_MODAL_HOST_ID = "rehash-modal-host";
 const REHASH_HISTORY_HOST_ID = "rehash-history-host";
 const REHASH_WIDGET_POSITION_KEY = "rehash_timer_widget_position";
+const REHASH_WIDGET_LAYOUT_KEY = "rehash_timer_widget_layout";
 const REHASH_STRIVER_BANNER_ID = "rehash-striver-banner";
 const DEFAULT_NOTION_URL = "https://www.notion.so";
 
@@ -12,6 +13,7 @@ const rehashState = {
   currentProblemSessions: [],
   currentStriverEntry: null,
   dragSession: null,
+  isWidgetCollapsed: false,
   modalShown: false,
   notionOpened: false,
   observer: null,
@@ -39,6 +41,7 @@ async function initializeRehashTimer() {
   await initializeStriverContext();
   updateWidgetProblem(extractLeetCodeProblem());
   await restoreWidgetPosition();
+  await restoreWidgetLayout();
   await loadTimerState();
   syncTimerUi();
   setupAcceptedObserver();
@@ -169,6 +172,12 @@ function injectTimerWidget() {
         font-size: 12px;
         line-height: 1.45;
         user-select: none;
+        transition: width 0.2s ease, padding 0.2s ease, opacity 0.2s ease;
+      }
+
+      .rehash-widget.compact {
+        width: 186px;
+        padding: 10px 12px 12px;
       }
 
       .rehash-header {
@@ -216,6 +225,28 @@ function injectTimerWidget() {
         background: #6e7797;
       }
 
+      .rehash-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .rehash-icon-button {
+        width: 30px;
+        height: 30px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #ffffff;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+      }
+
+      .rehash-icon-button:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
       .rehash-title {
         font-weight: 600;
         margin-bottom: 10px;
@@ -223,11 +254,21 @@ function injectTimerWidget() {
         overflow: hidden;
       }
 
+      .rehash-widget.compact .rehash-title,
+      .rehash-widget.compact .rehash-summary {
+        display: none;
+      }
+
       .rehash-timer {
         font-size: 24px;
         font-weight: 700;
         letter-spacing: 0.08em;
         margin-bottom: 12px;
+      }
+
+      .rehash-widget.compact .rehash-timer {
+        font-size: 20px;
+        margin-bottom: 10px;
       }
 
       .rehash-controls {
@@ -279,15 +320,26 @@ function injectTimerWidget() {
         color: #b9bfd6;
         min-height: 16px;
       }
+
+      .rehash-widget.compact .rehash-controls {
+        margin-bottom: 0;
+      }
+
+      .rehash-widget.compact #rehash-records-button {
+        display: none;
+      }
     </style>
-    <div class="rehash-widget">
+    <div class="rehash-widget" id="rehash-widget-shell">
       <div class="rehash-header">
         <div class="rehash-header-left">
           <div class="rehash-header-label">ReHash Timer</div>
         </div>
-        <button class="rehash-drag-grip" id="rehash-drag-grip" type="button" aria-label="Drag timer widget">
-          <span></span><span></span><span></span>
-        </button>
+        <div class="rehash-header-actions">
+          <button class="rehash-icon-button" id="rehash-toggle-compact" type="button" aria-label="Minimize timer widget" title="Minimize timer">−</button>
+          <button class="rehash-drag-grip" id="rehash-drag-grip" type="button" aria-label="Drag timer widget" title="Drag timer">
+            <span></span><span></span><span></span>
+          </button>
+        </div>
       </div>
       <div class="rehash-title" id="rehash-problem-title">Loading problem...</div>
       <div class="rehash-timer" id="rehash-timer-display">00:00</div>
@@ -317,6 +369,10 @@ function injectTimerWidget() {
 
   shadow.getElementById("rehash-records-button").addEventListener("click", () => {
     void openHistoryModal();
+  });
+
+  shadow.getElementById("rehash-toggle-compact").addEventListener("click", () => {
+    void toggleWidgetLayout();
   });
 
   initializeWidgetDragging(host, shadow.getElementById("rehash-drag-grip"));
@@ -383,6 +439,37 @@ async function restoreWidgetPosition() {
   host.style.top = `${clamp(saved.top, 8, Math.max(8, window.innerHeight - host.offsetHeight - 8))}px`;
   host.style.right = "auto";
   host.style.bottom = "auto";
+}
+
+async function restoreWidgetLayout() {
+  const saved = (await storageGet(REHASH_WIDGET_LAYOUT_KEY))[REHASH_WIDGET_LAYOUT_KEY];
+  rehashState.isWidgetCollapsed = Boolean(saved?.collapsed);
+  applyWidgetLayout();
+}
+
+async function toggleWidgetLayout() {
+  rehashState.isWidgetCollapsed = !rehashState.isWidgetCollapsed;
+  applyWidgetLayout();
+  await storageSet({
+    [REHASH_WIDGET_LAYOUT_KEY]: {
+      collapsed: rehashState.isWidgetCollapsed,
+    },
+  });
+}
+
+function applyWidgetLayout() {
+  const host = document.getElementById(REHASH_WIDGET_HOST_ID);
+  const shell = host?.shadowRoot?.getElementById("rehash-widget-shell");
+  const toggleButton = host?.shadowRoot?.getElementById("rehash-toggle-compact");
+
+  if (!shell || !toggleButton) {
+    return;
+  }
+
+  shell.classList.toggle("compact", rehashState.isWidgetCollapsed);
+  toggleButton.textContent = rehashState.isWidgetCollapsed ? "+" : "−";
+  toggleButton.setAttribute("aria-label", rehashState.isWidgetCollapsed ? "Expand timer widget" : "Minimize timer widget");
+  toggleButton.title = rehashState.isWidgetCollapsed ? "Expand timer" : "Minimize timer";
 }
 
 async function saveWidgetPosition(host) {
