@@ -288,6 +288,7 @@ function injectTimerWidget() {
         font-size: 12px;
         font-weight: 600;
         padding: 8px 10px;
+        min-width: 0;
       }
 
       .rehash-button:hover:not(:disabled) {
@@ -328,6 +329,13 @@ function injectTimerWidget() {
       .rehash-widget.compact #rehash-records-button {
         display: none;
       }
+
+      .rehash-widget.compact .rehash-button {
+        flex: 1 1 48px;
+        padding: 8px 0;
+        font-size: 16px;
+        line-height: 1;
+      }
     </style>
     <div class="rehash-widget" id="rehash-widget-shell">
       <div class="rehash-header">
@@ -344,10 +352,10 @@ function injectTimerWidget() {
       <div class="rehash-title" id="rehash-problem-title">Loading problem...</div>
       <div class="rehash-timer" id="rehash-timer-display">00:00</div>
       <div class="rehash-controls">
-        <button class="rehash-button" id="rehash-start-button">Start</button>
-        <button class="rehash-button secondary" id="rehash-pause-button">Pause</button>
-        <button class="rehash-button danger" id="rehash-reset-button">Reset</button>
-        <button class="rehash-button secondary" id="rehash-records-button">Records</button>
+        <button class="rehash-button" id="rehash-start-button" title="Start timer" aria-label="Start timer">▶</button>
+        <button class="rehash-button secondary" id="rehash-pause-button" title="Pause timer" aria-label="Pause timer">⏸</button>
+        <button class="rehash-button danger" id="rehash-reset-button" title="Reset timer" aria-label="Reset timer">↺</button>
+        <button class="rehash-button secondary" id="rehash-records-button" title="Open records" aria-label="Open records">≣</button>
       </div>
       <div class="rehash-summary" id="rehash-session-summary">No solve records yet.</div>
     </div>
@@ -533,7 +541,9 @@ function updateTimerButtons(timerState) {
   const hasElapsed = getElapsedMs(timerState) > 0;
   startButton.disabled = timerState.isRunning || timerState.isPaused || hasElapsed;
   pauseButton.disabled = !timerState.isRunning && !timerState.isPaused;
-  pauseButton.textContent = timerState.isPaused ? "Resume" : "Pause";
+  pauseButton.textContent = timerState.isPaused ? "▶" : "⏸";
+  pauseButton.title = timerState.isPaused ? "Resume timer" : "Pause timer";
+  pauseButton.setAttribute("aria-label", timerState.isPaused ? "Resume timer" : "Pause timer");
   resetButton.disabled = !timerState.isRunning && !timerState.isPaused && !hasElapsed;
 }
 
