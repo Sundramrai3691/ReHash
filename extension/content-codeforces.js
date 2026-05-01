@@ -1,9 +1,12 @@
 const REHASH_CF_WIDGET_HOST_ID = "rehash-cf-timer-host";
 const REHASH_CF_MODAL_HOST_ID = "rehash-cf-modal-host";
 const REHASH_CF_ACTIVE_KEY = "rehash_active_codeforces_timer";
+const REHASH_CF_STRIVER_BANNER_ID = "rehash-cf-striver-banner";
 
 const rehashCfState = {
   acceptFlowPending: false,
+  currentSolveCount: 0,
+  currentStriverEntry: null,
   elapsedSeconds: 0,
   modalShown: false,
   notionOpened: false,
@@ -29,6 +32,8 @@ async function initializeCodeforcesRehash() {
     return;
   }
 
+  await initializeStriverContext();
+
   if (isProblemPage()) {
     injectTimerWidget();
     updateWidgetProblem(extractCodeforcesProblem());
@@ -42,13 +47,17 @@ function extractCodeforcesProblem() {
   const title = extractTitle();
   const tags = extractTags();
   const difficulty = extractDifficulty();
+  const striverEntry = rehashCfState.currentStriverEntry || findStriverEntryForCurrentPage();
 
   return {
     title,
-    url: window.location.href,
+    url: normalizeProblemUrl(window.location.href),
     site: "codeforces",
     difficulty,
     tags,
+    striverId: striverEntry?.id || null,
+    striverStep: striverEntry?.step || null,
+    striverTopic: striverEntry?.topic || null,
   };
 }
 
@@ -134,7 +143,13 @@ function isSubmissionPage() {
 }
 
 function timerKeyForProblem(problemUrl) {
-  return `timer_${problemUrl}`;
+  return `timer_${normalizeProblemUrl(problemUrl)}`;
+}
+
+async function initializeStriverContext() {
+  rehashCfState.currentStriverEntry = findStriverEntryForCurrentPage();
+  rehashCfState.currentSolveCount = await getSolveCountForProblem(normalizeProblemUrl(window.location.href));
+  renderStriverBannerWithRetry();
 }
 
 function injectTimerWidget() {
@@ -622,6 +637,8 @@ async function openSolvedModal(problem, elapsedSeconds) {
       },
     });
 
+    rehashCfState.currentSolveCount += 1;
+    renderStriverBannerWithRetry();
     await clearTimerState(problem.url);
     closeSolvedModal();
   });
@@ -670,6 +687,95 @@ function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(message, (response) => resolve(response));
   });
+}
+
+function findStriverEntryForCurrentPage() {
+  return window.STRIVER_SHEET_UTILS?.findByProblemUrl?.(normalizeProblemUrl(window.location.href)) || null;
+}
+
+async function getSolveCountForProblem(problemUrl) {
+  const normalizedTarget = normalizeProblemUrl(problemUrl);
+  const solvedSessions = (await storageGet("solvedSessions")).solvedSessions;
+  const sessions = Array.isArray(solvedSessions) ? solvedSessions : [];
+
+  return sessions.filter((session) =>
+    normalizeProblemUrl(session.problemUrl || session.url || "") === normalizedTarget,
+  ).length;
+}
+
+function renderStriverBannerWithRetry(attempt = 0) {
+  if (!rehashCfState.currentStriverEntry || !isProblemPage()) {
+    return;
+  }
+
+  const titleElement = document.querySelector(".problem-statement .title") || document.querySelector(".title");
+  if (!titleElement) {
+    if (attempt < 12) {
+      window.setTimeout(() => renderStriverBannerWithRetry(attempt + 1), 400);
+    }
+    return;
+  }
+
+  document.getElementById(REHASH_CF_STRIVER_BANNER_ID)?.remove();
+
+  const banner = document.createElement("div");
+  banner.id = REHASH_CF_STRIVER_BANNER_ID;
+  banner.style.marginTop = "8px";
+  banner.style.padding = "8px 12px";
+  banner.style.borderRadius = "10px";
+  banner.style.background = "rgba(31, 111, 235, 0.08)";
+  banner.style.border = "1px solid rgba(31, 111, 235, 0.18)";
+  banner.style.fontSize = "13px";
+  banner.innerHTML = `
+    <strong>&#128203; Striver A2Z</strong>
+    <span style="opacity:0.82;"> - ${escapeHtml(getStepShortLabel(rehashCfState.currentStriverEntry.step))} - ${escapeHtml(rehashCfState.currentStriverEntry.topic)} - </span>
+    <span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#1f6feb;color:#fff;font-size:12px;">
+      ${escapeHtml(formatIterationBadge(rehashCfState.currentSolveCount))}
+    </span>
+  `;
+
+  titleElement.insertAdjacentElement("afterend", banner);
+}
+
+function getStepShortLabel(stepLabel) {
+  const match = String(stepLabel || "").match(/Step\s+\d+/i);
+  return match ? match[0] : stepLabel;
+}
+
+function formatIterationBadge(previousSolveCount) {
+  const nextIteration = previousSolveCount + 1;
+
+  if (nextIteration <= 1) {
+    return "Solving for 1st time";
+  }
+
+  if (nextIteration >= 4) {
+    return "4th+ revision";
+  }
+
+  return `${ordinalLabel(nextIteration)} revision`;
+}
+
+function ordinalLabel(value) {
+  if (value === 1) return "1st";
+  if (value === 2) return "2nd";
+  if (value === 3) return "3rd";
+  return `${value}th`;
+}
+
+function normalizeProblemUrl(url) {
+  return window.STRIVER_SHEET_UTILS?.normalizeProblemUrl
+    ? window.STRIVER_SHEET_UTILS.normalizeProblemUrl(url)
+    : normalizeProblemUrlFallback(url);
+}
+
+function normalizeProblemUrlFallback(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}/`;
+  } catch {
+    return url;
+  }
 }
 
 function storageGet(key) {

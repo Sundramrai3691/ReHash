@@ -92,6 +92,9 @@ test("saveProblem stores a new problem with initial review schedule", async () =
   assert.equal(problem.completed, false);
   assert.deepEqual(problem.topics, ["Array"]);
   assert.equal(problem.history[0].action, "added");
+  assert.equal(problem.iterationCount, 0);
+  assert.equal(problem.nextReviewDate, null);
+  assert.deepEqual(problem.solveSessionIds, []);
 });
 
 test("markRevised advances the bucket and schedules the next review", async () => {
@@ -114,22 +117,76 @@ test("markRevised advances the bucket and schedules the next review", async () =
   assert.equal(problem.history.at(-1).action, "revised");
 });
 
-test("saveSolvedSession records solve stats safely", async () => {
+test("saveSolvedSession records solve stats and updates the linked problem", async () => {
   const { context, storage } = createBackgroundHarness();
   await context.initializeSettings();
+  await context.saveProblem({
+    title: "Two Sum",
+    url: "https://leetcode.com/problems/two-sum/",
+    site: "leetcode",
+    tags: ["Array", "Hash Table"],
+    difficulty: "Easy",
+    striverId: "step3-15"
+  });
 
   const response = await context.saveSolvedSession({
     problemTitle: "Two Sum",
-    url: "https://leetcode.com/problems/two-sum",
+    problemUrl: "https://leetcode.com/problems/two-sum/",
     site: "leetcode",
+    striverId: "step3-15",
+    iteration: 2,
     tags: ["Array", "Hash Table"],
-    timeTaken: 321,
-    notionOpened: true
+    timeTakenMs: 321000,
+    notionOpened: true,
+    confidence: "Medium",
+    date: "2026-05-02T10:00:00.000Z",
+    nextReviewDate: "2026-05-07",
+    reviewDecision: "scheduled"
   });
 
   assert.equal(response.success, true);
   const sessions = storage.get("solvedSessions");
   assert.equal(sessions.length, 1);
-  assert.equal(sessions[0].timeTaken, 321);
+  assert.equal(sessions[0].timeTakenMs, 321000);
   assert.equal(sessions[0].notionOpened, true);
+  assert.equal(sessions[0].iteration, 2);
+
+  const problem = storage.get("revise_mate_data").problems["leetcode|/problems/two-sum"];
+  assert.equal(problem.iterationCount, 2);
+  assert.equal(problem.nextReviewDate, "2026-05-07");
+  assert.equal(problem.solveSessionIds.length, 1);
+});
+
+test("getProblemsForToday includes custom nextReviewDate entries", async () => {
+  const { context, storage } = createBackgroundHarness();
+  await context.initializeSettings();
+
+  storage.set("revise_mate_data", {
+    problems: {
+      "leetcode|/problems/two-sum": {
+        id: "leetcode|/problems/two-sum",
+        title: "Two Sum",
+        url: "https://leetcode.com/problems/two-sum/",
+        site: "leetcode",
+        difficulty: "Easy",
+        topics: ["Array"],
+        bucketIndex: 0,
+        nextReviewAt: Date.now() + 3 * 24 * 60 * 60 * 1000,
+        nextReviewDate: "2026-05-01",
+        history: [],
+        solveSessionIds: [],
+        iterationCount: 1,
+        completed: false
+      }
+    },
+    settings: {
+      intervals: [1, 2, 3, 7, 14],
+      reminderHour: 19,
+      syncHour: 21
+    }
+  });
+
+  const dueProblems = context.getProblemsForToday(storage.get("revise_mate_data").problems);
+  assert.equal(dueProblems.length, 1);
+  assert.equal(dueProblems[0].title, "Two Sum");
 });

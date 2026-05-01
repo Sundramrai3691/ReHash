@@ -9,7 +9,7 @@
   <body>
     <div class="container">
       <header>
-        <h1>ReHash — Today's Review</h1>
+        <h1>ReHash - Daily Review</h1>
         <div class="progress-bar">
           <div class="progress-fill" id="progressFill"></div>
         </div>
@@ -18,16 +18,41 @@
 
       <nav class="tabs">
         <button class="tab-btn active" data-tab="today">Today</button>
+        <button class="tab-btn" data-tab="queue">Queue</button>
         <button class="tab-btn" data-tab="all">All Problems</button>
         <button class="tab-btn" data-tab="add">Add/Save</button>
         <button class="tab-btn" data-tab="stats">Stats</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
       </nav>
 
       <main>
         <section class="tab-content active" id="todayTab">
+          <div class="section-intro">
+            <h3>Due Today</h3>
+            <p class="section-copy">Problems that are due from your bucket schedule or custom review dates.</p>
+          </div>
           <div id="todayList" class="problem-list"></div>
           <p class="empty-state" id="todayEmpty" style="display: none">
-            No problems due today! 🎉
+            No problems due today.
+          </p>
+        </section>
+
+        <section class="tab-content" id="queueTab">
+          <div class="queue-summary">
+            <div>
+              <h3 id="queueHeading">Today's Queue</h3>
+              <p class="queue-count" id="queueCount">0 problems due today</p>
+            </div>
+            <div class="queue-progress">
+              <div class="progress-bar">
+                <div class="progress-fill" id="queueProgressFill"></div>
+              </div>
+              <p class="progress-text" id="queueProgressText">0 solved today</p>
+            </div>
+          </div>
+          <div id="queueList" class="problem-list"></div>
+          <p class="empty-state" id="queueEmpty" style="display: none">
+            Queue is clear for today.
           </p>
         </section>
 
@@ -51,22 +76,18 @@
           <div class="extract-section">
             <p id="extractStatus">Checking current page...</p>
             <div id="extractedData" style="display: none">
-              <h3>Detected Problem:</h3>
+              <h3>Detected Problem</h3>
               <p><strong>Title:</strong> <span id="detectedTitle"></span></p>
               <p><strong>Site:</strong> <span id="detectedSite"></span></p>
-              <p>
-                <strong>Difficulty:</strong>
-                <span id="detectedDifficulty"></span>
-              </p>
+              <p><strong>Difficulty:</strong> <span id="detectedDifficulty"></span></p>
               <p><strong>Topics:</strong> <span id="detectedTopics"></span></p>
-              <button class="btn btn-primary" id="saveBtn">
-                Save to Revision
-              </button>
+              <p><strong>Striver:</strong> <span id="detectedStriver">Not mapped</span></p>
+              <button class="btn btn-primary" id="saveBtn">Save to Revision</button>
             </div>
           </div>
           <hr />
           <div class="manual-section">
-            <h3>Manual Add:</h3>
+            <h3>Manual Add</h3>
             <input
               type="text"
               id="manualTitle"
@@ -89,9 +110,7 @@
               placeholder="Tags (comma-separated)"
               class="input"
             />
-            <button class="btn btn-primary" id="manualSaveBtn">
-              Save Manually
-            </button>
+            <button class="btn btn-primary" id="manualSaveBtn">Save Manually</button>
           </div>
         </section>
 
@@ -117,13 +136,98 @@
               <h3>Notion Logging Rate</h3>
               <p class="stat-value" id="statsNotionRate">0%</p>
             </div>
+            <div class="stat-card">
+              <h3>Avg Improvement</h3>
+              <p class="stat-value" id="statsAverageImprovement">0%</p>
+            </div>
+            <div class="stat-card">
+              <h3>Fastest Topic</h3>
+              <p class="stat-value stat-value-small" id="statsFastestTopic">-</p>
+            </div>
+            <div class="stat-card">
+              <h3>Slowest Topic</h3>
+              <p class="stat-value stat-value-small" id="statsSlowestTopic">-</p>
+            </div>
             <div class="stat-card stat-card-wide">
               <h3>Slowest Topics</h3>
               <div id="slowestTopics" class="stats-list"></div>
             </div>
             <div class="stat-card stat-card-wide">
+              <h3>Problems Getting Slower</h3>
+              <div id="slowerProblems" class="stats-list"></div>
+            </div>
+            <div class="stat-card stat-card-wide">
               <h3>Topic Breakdown</h3>
               <div id="topicBreakdown" class="table-wrap"></div>
+            </div>
+            <div class="stat-card stat-card-wide">
+              <h3>Speed Progress</h3>
+              <div id="speedProgressList" class="speed-progress-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-content" id="settingsTab">
+          <div class="settings-section">
+            <h3>Review Settings</h3>
+            <label>SRS Intervals (days, comma-separated)</label>
+            <input
+              type="text"
+              id="intervalsInput"
+              class="input"
+              placeholder="1,2,3,7,14"
+            />
+            <label>Daily Reminder Hour (0-23)</label>
+            <input
+              type="number"
+              id="reminderHourInput"
+              class="input"
+              min="0"
+              max="23"
+              placeholder="19"
+            />
+            <label>Queue Sync Hour (0-23)</label>
+            <input
+              type="number"
+              id="syncHourInput"
+              class="input"
+              min="0"
+              max="23"
+              placeholder="21"
+            />
+            <label>Notion Log URL</label>
+            <input
+              type="text"
+              id="notionUrlInput"
+              class="input"
+              placeholder="Paste your Notion database URL here"
+            />
+          </div>
+
+          <div class="settings-section">
+            <h3>Sync to GitHub Gist</h3>
+            <label>GitHub Personal Access Token</label>
+            <input
+              type="password"
+              id="githubTokenInput"
+              class="input"
+              placeholder="PAT with gist scope"
+            />
+            <label>Gist ID</label>
+            <input
+              type="text"
+              id="githubGistIdInput"
+              class="input"
+              placeholder="Auto-created on first sync"
+            />
+            <label class="checkbox-row">
+              <input type="checkbox" id="githubAutoSyncInput" />
+              <span>Auto-sync after every solve session</span>
+            </label>
+            <p class="settings-meta" id="lastSyncStatus">Last sync: never</p>
+            <div class="settings-actions">
+              <button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
+              <button class="btn btn-secondary" id="syncNowBtn">Sync Now</button>
             </div>
           </div>
         </section>
@@ -131,7 +235,7 @@
 
       <footer>
         <button class="btn btn-secondary" id="exportBtn">Export CSV</button>
-        <button class="btn btn-secondary" id="settingsBtn">Settings</button>
+        <button class="btn btn-secondary" id="settingsBtn">Open Settings</button>
       </footer>
     </div>
 
@@ -146,43 +250,7 @@
       </div>
     </div>
 
-    <div class="modal" id="settingsModal" style="display: none">
-      <div class="modal-content">
-        <h3>Settings</h3>
-        <label>SRS Intervals (days, comma-separated):</label>
-        <input
-          type="text"
-          id="intervalsInput"
-          class="input"
-          placeholder="1,2,3,7,14"
-        />
-        <label>Daily Reminder Hour (0-23):</label>
-        <input
-          type="number"
-          id="reminderHourInput"
-          class="input"
-          min="0"
-          max="23"
-          placeholder="19"
-        />
-        <label>Notion Log URL:</label>
-        <input
-          type="text"
-          id="notionUrlInput"
-          class="input"
-          placeholder="Paste your Notion database URL here"
-        />
-        <div class="modal-actions">
-          <button class="btn btn-primary" id="saveSettingsBtn">
-            Save Settings
-          </button>
-          <button class="btn btn-secondary" id="cancelSettingsBtn">
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-
+    <script src="striver-sheet.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

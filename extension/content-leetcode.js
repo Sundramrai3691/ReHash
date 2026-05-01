@@ -1,15 +1,20 @@
-const REHASH_TIMER_KEY = `timer_${window.location.href}`;
+const REHASH_TIMER_PREFIX = "rehash_timer_state::";
 const REHASH_WIDGET_HOST_ID = "rehash-timer-host";
 const REHASH_MODAL_HOST_ID = "rehash-modal-host";
+const REHASH_WIDGET_POSITION_KEY = "rehash_timer_widget_position";
+const REHASH_STRIVER_BANNER_ID = "rehash-striver-banner";
+const DEFAULT_NOTION_URL = "https://www.notion.so";
 
 const rehashState = {
-  elapsedSeconds: 0,
+  acceptedHandled: false,
+  currentSolveCount: 0,
+  currentStriverEntry: null,
+  dragSession: null,
   modalShown: false,
   notionOpened: false,
   observer: null,
-  startTime: null,
   timerInterval: null,
-  timerRunning: false,
+  timerSnapshot: createDefaultTimerState(),
 };
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -20,7 +25,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 initializeRehashTimer().catch(() => {
-  // Keep the page usable even if timer setup fails.
+  // Keep extraction working even if timer bootstrapping fails.
 });
 
 async function initializeRehashTimer() {
@@ -29,22 +34,36 @@ async function initializeRehashTimer() {
   }
 
   injectTimerWidget();
+  await initializeStriverContext();
   updateWidgetProblem(extractLeetCodeProblem());
-  await restoreTimerState();
+  await restoreWidgetPosition();
+  await loadTimerState();
+  syncTimerUi();
   setupAcceptedObserver();
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+}
+
+async function initializeStriverContext() {
+  rehashState.currentStriverEntry = findStriverEntryForCurrentPage();
+  rehashState.currentSolveCount = await getSolveCountForProblem(getNormalizedProblemUrl());
+  renderStriverBannerWithRetry();
 }
 
 function extractLeetCodeProblem() {
   const title = extractTitle();
   const difficulty = extractDifficulty();
   const tags = extractTags();
+  const striverEntry = rehashState.currentStriverEntry || findStriverEntryForCurrentPage();
 
   return {
     title,
-    url: window.location.href,
+    url: getNormalizedProblemUrl(),
     site: "leetcode",
     difficulty,
     tags,
+    striverId: striverEntry?.id || null,
+    striverStep: striverEntry?.step || null,
+    striverTopic: striverEntry?.topic || null,
   };
 }
 
@@ -109,8 +128,8 @@ function extractTags() {
 
   for (const selector of selectors) {
     const elements = document.querySelectorAll(selector);
-    elements.forEach((el) => {
-      const text = el.textContent.trim();
+    elements.forEach((element) => {
+      const text = element.textContent.trim();
       if (text && !tags.includes(text)) {
         tags.push(text);
       }
@@ -129,24 +148,49 @@ function injectTimerWidget() {
 
   const host = document.createElement("div");
   host.id = REHASH_WIDGET_HOST_ID;
-  const shadow = host.attachShadow({ mode: "open" });
+  host.style.position = "fixed";
+  host.style.top = "16px";
+  host.style.right = "16px";
+  host.style.zIndex = "9999";
 
+  const shadow = host.attachShadow({ mode: "open" });
   shadow.innerHTML = `
     <style>
       .rehash-widget {
-        position: fixed;
-        right: 20px;
-        bottom: 20px;
-        z-index: 9999;
-        width: 240px;
+        width: 260px;
         background: #1a1a2e;
         color: #ffffff;
         border-radius: 12px;
-        padding: 12px 16px;
+        padding: 12px 14px 14px;
         box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
         font-size: 12px;
         line-height: 1.45;
+        user-select: none;
+      }
+
+      .rehash-drag-handle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: move;
+        margin-bottom: 10px;
+        color: #b9bfd6;
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .rehash-grip {
+        display: inline-flex;
+        gap: 3px;
+      }
+
+      .rehash-grip span {
+        width: 4px;
+        height: 4px;
+        border-radius: 999px;
+        background: #6e7797;
       }
 
       .rehash-title {
@@ -156,14 +200,20 @@ function injectTimerWidget() {
         overflow: hidden;
       }
 
+      .rehash-timer {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        margin-bottom: 12px;
+      }
+
       .rehash-controls {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
+        gap: 8px;
       }
 
       .rehash-button {
+        flex: 1;
         border: none;
         border-radius: 999px;
         background: #0f3460;
@@ -171,182 +221,359 @@ function injectTimerWidget() {
         cursor: pointer;
         font-size: 12px;
         font-weight: 600;
-        padding: 7px 12px;
+        padding: 8px 10px;
       }
 
-      .rehash-button:hover {
+      .rehash-button:hover:not(:disabled) {
         background: #17568c;
       }
 
-      .rehash-button.stop {
+      .rehash-button.secondary {
+        background: #3b4259;
+      }
+
+      .rehash-button.secondary:hover:not(:disabled) {
+        background: #4b5473;
+      }
+
+      .rehash-button.danger {
         background: #b33939;
       }
 
-      .rehash-button.stop:hover {
+      .rehash-button.danger:hover:not(:disabled) {
         background: #cf4a4a;
       }
 
-      .rehash-timer {
-        font-size: 18px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        min-width: 58px;
-        text-align: right;
+      .rehash-button:disabled {
+        cursor: default;
+        opacity: 0.45;
       }
     </style>
     <div class="rehash-widget">
+      <div class="rehash-drag-handle" id="rehash-drag-handle">
+        <span>ReHash Timer</span>
+        <span class="rehash-grip" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+      </div>
       <div class="rehash-title" id="rehash-problem-title">Loading problem...</div>
+      <div class="rehash-timer" id="rehash-timer-display">00:00</div>
       <div class="rehash-controls">
-        <button class="rehash-button" id="rehash-toggle-button">▶ Start Timer</button>
-        <div class="rehash-timer" id="rehash-timer-display">00:00</div>
+        <button class="rehash-button" id="rehash-start-button">Start</button>
+        <button class="rehash-button secondary" id="rehash-pause-button">Pause</button>
+        <button class="rehash-button danger" id="rehash-reset-button">Reset</button>
       </div>
     </div>
   `;
 
   document.documentElement.appendChild(host);
 
-  shadow.getElementById("rehash-toggle-button").addEventListener("click", () => {
-    if (rehashState.timerRunning) {
-      stopTimer({ showModal: true });
-    } else {
-      startTimer();
+  shadow.getElementById("rehash-start-button").addEventListener("click", () => {
+    void startTimer();
+  });
+
+  shadow.getElementById("rehash-pause-button").addEventListener("click", () => {
+    void togglePauseResume();
+  });
+
+  shadow.getElementById("rehash-reset-button").addEventListener("click", () => {
+    void resetTimer();
+  });
+
+  initializeWidgetDragging(host, shadow.getElementById("rehash-drag-handle"));
+}
+
+function initializeWidgetDragging(host, handle) {
+  handle.addEventListener("pointerdown", (event) => {
+    const rect = host.getBoundingClientRect();
+    host.style.left = `${rect.left}px`;
+    host.style.top = `${rect.top}px`;
+    host.style.right = "auto";
+    host.style.bottom = "auto";
+
+    rehashState.dragSession = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      pointerId: event.pointerId,
+    };
+
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+
+  handle.addEventListener("pointermove", (event) => {
+    if (!rehashState.dragSession || rehashState.dragSession.pointerId !== event.pointerId) {
+      return;
     }
+
+    const left = clamp(
+      event.clientX - rehashState.dragSession.offsetX,
+      8,
+      Math.max(8, window.innerWidth - host.offsetWidth - 8),
+    );
+    const top = clamp(
+      event.clientY - rehashState.dragSession.offsetY,
+      8,
+      Math.max(8, window.innerHeight - host.offsetHeight - 8),
+    );
+
+    host.style.left = `${left}px`;
+    host.style.top = `${top}px`;
+  });
+
+  handle.addEventListener("pointerup", () => {
+    void saveWidgetPosition(host);
+    rehashState.dragSession = null;
+  });
+
+  handle.addEventListener("pointercancel", () => {
+    void saveWidgetPosition(host);
+    rehashState.dragSession = null;
+  });
+}
+
+async function restoreWidgetPosition() {
+  const host = document.getElementById(REHASH_WIDGET_HOST_ID);
+  const saved = (await storageGet(REHASH_WIDGET_POSITION_KEY))[REHASH_WIDGET_POSITION_KEY];
+
+  if (!host || !saved || !Number.isFinite(saved.left) || !Number.isFinite(saved.top)) {
+    return;
+  }
+
+  host.style.left = `${clamp(saved.left, 8, Math.max(8, window.innerWidth - host.offsetWidth - 8))}px`;
+  host.style.top = `${clamp(saved.top, 8, Math.max(8, window.innerHeight - host.offsetHeight - 8))}px`;
+  host.style.right = "auto";
+  host.style.bottom = "auto";
+}
+
+async function saveWidgetPosition(host) {
+  const left = parseInt(host.style.left || "", 10);
+  const top = parseInt(host.style.top || "", 10);
+
+  if (!Number.isFinite(left) || !Number.isFinite(top)) {
+    return;
+  }
+
+  await storageSet({
+    [REHASH_WIDGET_POSITION_KEY]: {
+      left,
+      top,
+    },
   });
 }
 
 function updateWidgetProblem(problem) {
   const host = document.getElementById(REHASH_WIDGET_HOST_ID);
-  const titleEl = host?.shadowRoot?.getElementById("rehash-problem-title");
-  if (titleEl) {
-    titleEl.textContent = problem.title || "Unknown Problem";
+  const titleElement = host?.shadowRoot?.getElementById("rehash-problem-title");
+  if (titleElement) {
+    titleElement.textContent = problem.title || "Unknown Problem";
   }
 }
 
-function updateTimerDisplay(totalSeconds) {
+function updateTimerDisplay(elapsedMs) {
   const host = document.getElementById(REHASH_WIDGET_HOST_ID);
-  const timerEl = host?.shadowRoot?.getElementById("rehash-timer-display");
-  if (timerEl) {
-    timerEl.textContent = formatTimer(totalSeconds);
+  const timerElement = host?.shadowRoot?.getElementById("rehash-timer-display");
+  if (timerElement) {
+    timerElement.textContent = formatTimer(elapsedMs);
   }
 }
 
-function updateTimerButton() {
+function updateTimerButtons(timerState) {
   const host = document.getElementById(REHASH_WIDGET_HOST_ID);
-  const button = host?.shadowRoot?.getElementById("rehash-toggle-button");
-  if (!button) {
+  const startButton = host?.shadowRoot?.getElementById("rehash-start-button");
+  const pauseButton = host?.shadowRoot?.getElementById("rehash-pause-button");
+  const resetButton = host?.shadowRoot?.getElementById("rehash-reset-button");
+
+  if (!startButton || !pauseButton || !resetButton) {
     return;
   }
 
-  button.textContent = rehashState.timerRunning ? "⏹ Stop" : "▶ Start Timer";
-  button.classList.toggle("stop", rehashState.timerRunning);
+  const hasElapsed = getElapsedMs(timerState) > 0;
+  startButton.disabled = timerState.isRunning || timerState.isPaused || hasElapsed;
+  pauseButton.disabled = !timerState.isRunning && !timerState.isPaused;
+  pauseButton.textContent = timerState.isPaused ? "Resume" : "Pause";
+  resetButton.disabled = !timerState.isRunning && !timerState.isPaused && !hasElapsed;
 }
 
-async function restoreTimerState() {
-  const saved = await storageGet(REHASH_TIMER_KEY);
-  const timerState = saved[REHASH_TIMER_KEY];
-
-  if (!timerState) {
-    updateTimerButton();
-    updateTimerDisplay(0);
-    return;
-  }
-
-  if (timerState.problemTitle) {
-    updateWidgetProblem({ title: timerState.problemTitle });
-  }
-
-  if (timerState.running && timerState.startTime) {
-    rehashState.startTime = timerState.startTime;
-    rehashState.timerRunning = true;
-    beginTimerTick();
-  } else {
-    rehashState.elapsedSeconds = timerState.elapsedSeconds || 0;
-    updateTimerDisplay(rehashState.elapsedSeconds);
-  }
-
-  updateTimerButton();
-}
-
-async function startTimer() {
-  const problem = extractLeetCodeProblem();
-  updateWidgetProblem(problem);
-
-  rehashState.elapsedSeconds = 0;
-  rehashState.modalShown = false;
-  rehashState.notionOpened = false;
-  rehashState.startTime = Date.now();
-  rehashState.timerRunning = true;
-
-  await storageSet({
-    [REHASH_TIMER_KEY]: {
-      elapsedSeconds: 0,
-      problemTitle: problem.title,
-      running: true,
-      site: problem.site,
-      startTime: rehashState.startTime,
-      tags: problem.tags,
-      url: problem.url,
-    },
-  });
-
-  beginTimerTick();
-  updateTimerButton();
-}
-
-function beginTimerTick() {
-  clearInterval(rehashState.timerInterval);
+function startDisplayInterval() {
+  stopDisplayInterval();
 
   const tick = () => {
-    if (!rehashState.startTime) {
-      return;
-    }
-
-    rehashState.elapsedSeconds = Math.max(
-      0,
-      Math.floor((Date.now() - rehashState.startTime) / 1000),
-    );
-    updateTimerDisplay(rehashState.elapsedSeconds);
+    updateTimerDisplay(getElapsedMs(rehashState.timerSnapshot));
   };
 
   tick();
   rehashState.timerInterval = window.setInterval(tick, 1000);
 }
 
-async function stopTimer({ showModal }) {
-  if (!rehashState.timerRunning && rehashState.elapsedSeconds === 0) {
+function stopDisplayInterval() {
+  if (rehashState.timerInterval) {
+    window.clearInterval(rehashState.timerInterval);
+    rehashState.timerInterval = null;
+  }
+}
+
+async function handleVisibilityChange() {
+  if (document.hidden) {
+    stopDisplayInterval();
     return;
   }
 
-  if (rehashState.timerRunning && rehashState.startTime) {
-    rehashState.elapsedSeconds = Math.max(
-      0,
-      Math.floor((Date.now() - rehashState.startTime) / 1000),
-    );
+  await loadTimerState();
+  syncTimerUi();
+}
+
+function syncTimerUi() {
+  updateTimerDisplay(getElapsedMs(rehashState.timerSnapshot));
+  updateTimerButtons(rehashState.timerSnapshot);
+
+  if (!document.hidden && rehashState.timerSnapshot.isRunning) {
+    startDisplayInterval();
+  } else {
+    stopDisplayInterval();
   }
+}
 
-  clearInterval(rehashState.timerInterval);
-  rehashState.timerInterval = null;
-  rehashState.timerRunning = false;
-  rehashState.startTime = null;
+async function startTimer() {
+  updateWidgetProblem(extractLeetCodeProblem());
+  rehashState.acceptedHandled = false;
 
-  const problem = extractLeetCodeProblem();
-  await storageSet({
-    [REHASH_TIMER_KEY]: {
-      elapsedSeconds: rehashState.elapsedSeconds,
-      problemTitle: problem.title,
-      running: false,
-      site: problem.site,
-      tags: problem.tags,
-      url: problem.url,
-    },
+  await persistTimerState({
+    startEpoch: Date.now(),
+    isRunning: true,
+    isPaused: false,
+    pausedAccumMs: 0,
   });
 
-  updateTimerDisplay(rehashState.elapsedSeconds);
-  updateTimerButton();
+  syncTimerUi();
+}
 
-  if (showModal) {
-    await openSolvedModal(problem, rehashState.elapsedSeconds);
+async function togglePauseResume() {
+  const timerState = await loadTimerState();
+
+  if (timerState.isRunning) {
+    await pauseTimer(timerState);
+    return;
   }
+
+  if (timerState.isPaused) {
+    await resumeTimer(timerState);
+  }
+}
+
+async function pauseTimer(timerState = rehashState.timerSnapshot) {
+  const elapsedMs = getElapsedMs(timerState);
+
+  await persistTimerState({
+    startEpoch: null,
+    isRunning: false,
+    isPaused: true,
+    pausedAccumMs: elapsedMs,
+  });
+
+  syncTimerUi();
+}
+
+async function resumeTimer(timerState = rehashState.timerSnapshot) {
+  const pausedAccumMs = Math.max(0, timerState.pausedAccumMs || 0);
+
+  await persistTimerState({
+    startEpoch: Date.now(),
+    isRunning: true,
+    isPaused: false,
+    pausedAccumMs,
+  });
+
+  syncTimerUi();
+}
+
+async function resetTimer() {
+  rehashState.acceptedHandled = false;
+  await persistTimerState(createDefaultTimerState());
+  syncTimerUi();
+}
+
+async function stopTimerForSolvedFlow() {
+  const timerState = await loadTimerState();
+  const elapsedMs = getElapsedMs(timerState);
+
+  await persistTimerState({
+    startEpoch: null,
+    isRunning: false,
+    isPaused: true,
+    pausedAccumMs: elapsedMs,
+  });
+
+  syncTimerUi();
+  return elapsedMs;
+}
+
+async function loadTimerState() {
+  const key = getTimerStorageKey();
+  const saved = (await storageGet(key))[key];
+  return cacheTimerState(normalizeTimerState(saved));
+}
+
+async function persistTimerState(timerState) {
+  const key = getTimerStorageKey();
+  const normalized = cacheTimerState(normalizeTimerState(timerState));
+  await storageSet({ [key]: normalized });
+  return normalized;
+}
+
+function cacheTimerState(timerState) {
+  rehashState.timerSnapshot = normalizeTimerState(timerState);
+  return rehashState.timerSnapshot;
+}
+
+function createDefaultTimerState() {
+  return {
+    startEpoch: null,
+    isRunning: false,
+    isPaused: false,
+    pausedAccumMs: 0,
+  };
+}
+
+function normalizeTimerState(timerState) {
+  const normalized = {
+    startEpoch: Number.isFinite(timerState?.startEpoch) ? timerState.startEpoch : null,
+    isRunning: Boolean(timerState?.isRunning),
+    isPaused: Boolean(timerState?.isPaused),
+    pausedAccumMs: Number.isFinite(timerState?.pausedAccumMs) ? Math.max(0, timerState.pausedAccumMs) : 0,
+  };
+
+  if (!normalized.startEpoch) {
+    normalized.startEpoch = null;
+  }
+
+  if (normalized.isRunning && normalized.startEpoch === null) {
+    normalized.isRunning = false;
+  }
+
+  if (normalized.isRunning) {
+    normalized.isPaused = false;
+  }
+
+  return normalized;
+}
+
+function getElapsedMs(timerState) {
+  if (timerState.isRunning && Number.isFinite(timerState.startEpoch)) {
+    return Math.max(0, Date.now() - timerState.startEpoch + timerState.pausedAccumMs);
+  }
+
+  return Math.max(0, timerState.pausedAccumMs || 0);
+}
+
+function getNormalizedProblemUrl(url = window.location.href) {
+  return window.STRIVER_SHEET_UTILS?.normalizeProblemUrl
+    ? window.STRIVER_SHEET_UTILS.normalizeProblemUrl(url)
+    : normalizeProblemUrlFallback(url);
+}
+
+function getTimerStorageKey() {
+  return `${REHASH_TIMER_PREFIX}${getNormalizedProblemUrl()}`;
 }
 
 function setupAcceptedObserver() {
@@ -355,33 +582,127 @@ function setupAcceptedObserver() {
   }
 
   rehashState.observer = new MutationObserver(() => {
-    if (rehashState.modalShown || (!rehashState.timerRunning && rehashState.elapsedSeconds === 0)) {
-      return;
-    }
-
-    if (hasAcceptedVerdict()) {
-      stopTimer({ showModal: true });
-    }
+    void maybeHandleAcceptedSubmission();
   });
 
   rehashState.observer.observe(document.body, {
     childList: true,
     subtree: true,
+    characterData: true,
   });
+
+  void maybeHandleAcceptedSubmission();
 }
 
-function hasAcceptedVerdict() {
-  const verdict = document.querySelector('[data-e2e-locator="submission-result"]');
-  if (verdict && verdict.textContent.toLowerCase().includes("accepted")) {
-    return true;
+async function maybeHandleAcceptedSubmission() {
+  if (rehashState.acceptedHandled || rehashState.modalShown || !findAcceptedVerdictNode()) {
+    return;
   }
 
-  return Array.from(document.querySelectorAll("div")).some((div) =>
-    div.textContent && div.textContent.trim().toLowerCase() === "accepted",
+  const timerState = await loadTimerState();
+  const elapsedMs = getElapsedMs(timerState);
+
+  if (!timerState.isRunning && elapsedMs === 0) {
+    return;
+  }
+
+  rehashState.acceptedHandled = true;
+  const problem = extractLeetCodeProblem();
+  const finalElapsedMs = timerState.isRunning ? await stopTimerForSolvedFlow() : elapsedMs;
+  await openSolvedModal(problem, finalElapsedMs);
+}
+
+function findAcceptedVerdictNode() {
+  const explicitVerdict = document.querySelector('[data-e2e-locator="submission-result"]');
+  if (explicitVerdict && /accepted/i.test(explicitVerdict.textContent || "")) {
+    return explicitVerdict;
+  }
+
+  return Array.from(document.querySelectorAll(".text-green-s")).find((element) =>
+    /accepted/i.test(element.textContent || ""),
+  ) || null;
+}
+
+function findStriverEntryForCurrentPage() {
+  return window.STRIVER_SHEET_UTILS?.findByProblemUrl?.(getNormalizedProblemUrl()) || null;
+}
+
+async function getSolveCountForProblem(problemUrl) {
+  const normalizedTarget = getNormalizedProblemUrl(problemUrl);
+  const solvedSessions = (await storageGet("solvedSessions")).solvedSessions;
+  const sessions = Array.isArray(solvedSessions) ? solvedSessions : [];
+
+  return sessions.filter((session) =>
+    getNormalizedProblemUrl(session.problemUrl || session.url || "") === normalizedTarget,
+  ).length;
+}
+
+function renderStriverBannerWithRetry(attempt = 0) {
+  if (!rehashState.currentStriverEntry) {
+    return;
+  }
+
+  const titleElement = findTitleElement();
+  if (!titleElement) {
+    if (attempt < 12) {
+      window.setTimeout(() => renderStriverBannerWithRetry(attempt + 1), 400);
+    }
+    return;
+  }
+
+  const existing = document.getElementById(REHASH_STRIVER_BANNER_ID);
+  if (existing) {
+    existing.remove();
+  }
+
+  const banner = document.createElement("div");
+  banner.id = REHASH_STRIVER_BANNER_ID;
+  banner.style.marginTop = "10px";
+  banner.style.padding = "8px 12px";
+  banner.style.borderRadius = "10px";
+  banner.style.background = "linear-gradient(135deg, rgba(31, 111, 235, 0.12), rgba(13, 17, 23, 0.06))";
+  banner.style.border = "1px solid rgba(31, 111, 235, 0.2)";
+  banner.style.fontSize = "13px";
+  banner.style.color = "inherit";
+  banner.innerHTML = `
+    <strong>&#128203; Striver A2Z</strong>
+    <span style="opacity:0.85;"> - ${escapeHtml(getStepShortLabel(rehashState.currentStriverEntry.step))} - ${escapeHtml(rehashState.currentStriverEntry.topic)} - </span>
+    <span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#1f6feb;color:#fff;font-size:12px;">
+      ${escapeHtml(formatIterationBadge(rehashState.currentSolveCount))}
+    </span>
+  `;
+
+  titleElement.insertAdjacentElement("afterend", banner);
+}
+
+function findTitleElement() {
+  return (
+    document.querySelector('div[data-cy="question-title"]') ||
+    document.querySelector(".css-1hwfws3 h1") ||
+    document.querySelector("h1")
   );
 }
 
-async function openSolvedModal(problem, elapsedSeconds) {
+function getStepShortLabel(stepLabel) {
+  const match = String(stepLabel || "").match(/Step\s+\d+/i);
+  return match ? match[0] : stepLabel;
+}
+
+function formatIterationBadge(previousSolveCount) {
+  const nextIteration = previousSolveCount + 1;
+
+  if (nextIteration <= 1) {
+    return "Solving for 1st time";
+  }
+
+  if (nextIteration >= 4) {
+    return "4th+ revision";
+  }
+
+  return `${ordinalLabel(nextIteration)} revision`;
+}
+
+async function openSolvedModal(problem, elapsedMs) {
   if (rehashState.modalShown || document.getElementById(REHASH_MODAL_HOST_ID)) {
     return;
   }
@@ -389,12 +710,14 @@ async function openSolvedModal(problem, elapsedSeconds) {
   rehashState.modalShown = true;
   rehashState.notionOpened = false;
 
-  const response = await sendRuntimeMessage({ action: "GET_NOTION_URL" });
-  const notionUrl = response?.notionUrl || "https://www.notion.so";
+  const previousSolveCount = await getSolveCountForProblem(problem.url);
+  const defaultIteration = Math.min(previousSolveCount + 1, 4);
+  const notionResponse = await sendRuntimeMessage({ action: "GET_NOTION_URL" });
+  const notionUrl = notionResponse?.notionUrl || DEFAULT_NOTION_URL;
+  const tags = Array.isArray(problem.tags) ? problem.tags : [];
   const host = document.createElement("div");
   host.id = REHASH_MODAL_HOST_ID;
   const shadow = host.attachShadow({ mode: "open" });
-  const tags = Array.isArray(problem.tags) ? problem.tags : [];
 
   shadow.innerHTML = `
     <style>
@@ -410,47 +733,113 @@ async function openSolvedModal(problem, elapsedSeconds) {
       }
 
       .rehash-modal {
-        width: min(420px, 100%);
+        width: min(560px, 100%);
+        max-height: min(88vh, 760px);
+        overflow-y: auto;
         background: #1a1a2e;
         color: #ffffff;
-        border-radius: 16px;
-        padding: 20px;
+        border-radius: 18px;
+        padding: 22px;
         box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
       }
 
       .rehash-heading {
-        font-size: 22px;
+        font-size: 24px;
         font-weight: 700;
         margin-bottom: 8px;
       }
 
-      .rehash-subtitle,
-      .rehash-time,
-      .rehash-tags {
-        font-size: 13px;
-        margin-bottom: 10px;
-        color: #e4e6f0;
+      .rehash-subtitle {
+        color: #d7dcef;
+        font-size: 14px;
+        margin-bottom: 18px;
       }
 
-      .rehash-textarea {
+      .rehash-section {
+        margin-bottom: 18px;
+        padding: 14px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      .rehash-section h3 {
+        font-size: 15px;
+        margin-bottom: 10px;
+      }
+
+      .rehash-chip-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .rehash-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid #3d4664;
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: #111827;
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      .rehash-chip input {
+        margin: 0;
+      }
+
+      .rehash-field {
+        display: block;
         width: 100%;
-        min-height: 96px;
+        margin-top: 8px;
         border: 1px solid #34495e;
         border-radius: 12px;
-        padding: 12px;
+        padding: 11px 12px;
         background: #111827;
         color: #ffffff;
         font: inherit;
-        resize: vertical;
         box-sizing: border-box;
-        margin-bottom: 14px;
+      }
+
+      .rehash-readonly {
+        opacity: 0.85;
+      }
+
+      .rehash-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .rehash-label {
+        display: block;
+        font-size: 12px;
+        color: #c4c9df;
+        margin-bottom: 6px;
+      }
+
+      .rehash-inline-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 6px;
+        color: #d7dcef;
+        font-size: 12px;
+      }
+
+      .rehash-pill {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
       }
 
       .rehash-actions {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
+        justify-content: flex-end;
       }
 
       .rehash-action {
@@ -459,7 +848,7 @@ async function openSolvedModal(problem, elapsedSeconds) {
         cursor: pointer;
         font-size: 13px;
         font-weight: 600;
-        padding: 10px 14px;
+        padding: 11px 16px;
       }
 
       .rehash-action.notion {
@@ -471,17 +860,77 @@ async function openSolvedModal(problem, elapsedSeconds) {
         background: #4caf50;
         color: #ffffff;
       }
+
+      .rehash-action.cancel {
+        background: #3b4259;
+        color: #ffffff;
+      }
     </style>
     <div class="rehash-overlay">
       <div class="rehash-modal">
-        <div class="rehash-heading">✅ Problem Solved!</div>
+        <div class="rehash-heading">Accepted Submission Logged</div>
         <div class="rehash-subtitle">${escapeHtml(problem.title)}</div>
-        <div class="rehash-time">Time: ${formatDurationLabel(elapsedSeconds)}</div>
-        <div class="rehash-tags">Topics: ${escapeHtml(tags.join(", ") || "None")}</div>
-        <textarea class="rehash-textarea" id="rehash-note-input" placeholder="Quick note / mistake? (optional)"></textarea>
+
+        <div class="rehash-section">
+          <h3>Step A - Which revision is this?</h3>
+          <div class="rehash-chip-group" id="iterationGroup">
+            ${renderIterationOption(1, defaultIteration)}
+            ${renderIterationOption(2, defaultIteration)}
+            ${renderIterationOption(3, defaultIteration)}
+            ${renderIterationOption(4, defaultIteration, "4th+")}
+          </div>
+        </div>
+
+        <div class="rehash-section" id="scheduleSection" style="display:${defaultIteration >= 2 ? "block" : "none"};">
+          <h3>Step B - Schedule next review in:</h3>
+          <div class="rehash-chip-group">
+            ${renderScheduleOption("2", "2 days", true)}
+            ${renderScheduleOption("5", "5 days")}
+            ${renderScheduleOption("10", "10 days")}
+            ${renderScheduleOption("30", "30 days")}
+            ${renderScheduleOption("done", "Done")}
+          </div>
+        </div>
+
+        <div class="rehash-section">
+          <h3>Step C - Solve session details</h3>
+          <div class="rehash-inline-meta">
+            <span class="rehash-pill">${escapeHtml(problem.difficulty || "Unknown")}</span>
+            <span class="rehash-pill">${escapeHtml(tags.join(", ") || "No topics")}</span>
+            ${rehashState.currentStriverEntry ? `<span class="rehash-pill">${escapeHtml(rehashState.currentStriverEntry.topic)}</span>` : ""}
+          </div>
+          <div class="rehash-grid">
+            <div>
+              <label class="rehash-label" for="rehash-time-taken">Time taken</label>
+              <input id="rehash-time-taken" class="rehash-field rehash-readonly" type="text" value="${escapeAttribute(formatDurationLabelFromMs(elapsedMs))}" readonly />
+            </div>
+            <div>
+              <label class="rehash-label" for="rehash-approach">Approach used</label>
+              <textarea id="rehash-approach" class="rehash-field" rows="3" placeholder="Two pointers, binary search on answer, monotonic stack..."></textarea>
+            </div>
+            <div>
+              <label class="rehash-label" for="rehash-mistakes">Mistakes made</label>
+              <textarea id="rehash-mistakes" class="rehash-field" rows="3" placeholder="Missed an edge case, off-by-one, forgot to sort first..."></textarea>
+            </div>
+            <div>
+              <label class="rehash-label" for="rehash-notes">Notes</label>
+              <textarea id="rehash-notes" class="rehash-field" rows="3" placeholder="What to remember next time"></textarea>
+            </div>
+            <div>
+              <label class="rehash-label" for="rehash-confidence">Confidence</label>
+              <select id="rehash-confidence" class="rehash-field">
+                <option value="Easy">Easy</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="Hard">Hard</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div class="rehash-actions">
-          <button class="rehash-action notion" id="rehash-open-notion">📝 Open Notion Log</button>
-          <button class="rehash-action save" id="rehash-save-close">✔ Save & Close</button>
+          <button class="rehash-action notion" id="rehash-open-notion">Open Notion Log</button>
+          <button class="rehash-action cancel" id="rehash-close-modal">Close</button>
+          <button class="rehash-action save" id="rehash-save-close">Save Session</button>
         </div>
       </div>
     </div>
@@ -489,41 +938,101 @@ async function openSolvedModal(problem, elapsedSeconds) {
 
   document.documentElement.appendChild(host);
 
+  const scheduleSection = shadow.getElementById("scheduleSection");
+  shadow.getElementById("iterationGroup").addEventListener("change", () => {
+    const iteration = getSelectedIteration(shadow);
+    scheduleSection.style.display = iteration >= 2 ? "block" : "none";
+  });
+
   shadow.getElementById("rehash-open-notion").addEventListener("click", async () => {
     await sendRuntimeMessage({ action: "OPEN_NOTION_URL", url: notionUrl });
     rehashState.notionOpened = true;
   });
 
+  shadow.getElementById("rehash-close-modal").addEventListener("click", () => {
+    closeSolvedModal();
+  });
+
   shadow.getElementById("rehash-save-close").addEventListener("click", async () => {
-    const note = shadow.getElementById("rehash-note-input").value.trim();
+    const iteration = getSelectedIteration(shadow);
+    const scheduleChoice = iteration >= 2 ? getSelectedSchedule(shadow) : null;
+    const nextReviewDate = scheduleChoice && scheduleChoice !== "done"
+      ? buildIsoDateFromToday(parseInt(scheduleChoice, 10))
+      : null;
+    const reviewDecision = scheduleChoice === "done"
+      ? "done"
+      : nextReviewDate
+        ? "scheduled"
+        : "none";
+
+    const session = {
+      problemUrl: problem.url,
+      problemTitle: problem.title,
+      striverId: rehashState.currentStriverEntry?.id || null,
+      striverStep: rehashState.currentStriverEntry?.step || null,
+      striverTopic: rehashState.currentStriverEntry?.topic || null,
+      iteration,
+      timeTakenMs: Math.max(0, Math.round(elapsedMs)),
+      approach: shadow.getElementById("rehash-approach").value.trim(),
+      mistakes: shadow.getElementById("rehash-mistakes").value.trim(),
+      notes: shadow.getElementById("rehash-notes").value.trim(),
+      confidence: shadow.getElementById("rehash-confidence").value,
+      date: new Date().toISOString(),
+      nextReviewDate,
+      reviewDecision,
+      site: problem.site,
+      tags,
+      notionOpened: rehashState.notionOpened,
+      difficulty: problem.difficulty || "Unknown",
+    };
+
     await sendRuntimeMessage({
       action: "SAVE_SESSION",
-      session: {
-        date: new Date().toISOString(),
-        notionOpened: rehashState.notionOpened,
-        note,
-        problemTitle: problem.title,
-        site: problem.site,
-        tags,
-        timeTaken: elapsedSeconds,
-        url: problem.url,
-      },
+      session,
     });
 
-    await clearTimerState();
+    rehashState.currentSolveCount += 1;
+    renderStriverBannerWithRetry();
+    await persistTimerState(createDefaultTimerState());
+    syncTimerUi();
     closeSolvedModal();
   });
 }
 
-async function clearTimerState() {
-  clearInterval(rehashState.timerInterval);
-  rehashState.timerInterval = null;
-  rehashState.timerRunning = false;
-  rehashState.startTime = null;
-  rehashState.elapsedSeconds = 0;
-  updateTimerButton();
-  updateTimerDisplay(0);
-  await storageRemove(REHASH_TIMER_KEY);
+function renderIterationOption(iteration, selectedIteration, labelOverride) {
+  const label = labelOverride || ordinalLabel(iteration);
+  return `
+    <label class="rehash-chip">
+      <input type="radio" name="rehash-iteration" value="${iteration}" ${iteration === selectedIteration ? "checked" : ""} />
+      <span>${escapeHtml(label)}</span>
+    </label>
+  `;
+}
+
+function renderScheduleOption(value, label, selected) {
+  return `
+    <label class="rehash-chip">
+      <input type="radio" name="rehash-schedule" value="${escapeAttribute(value)}" ${selected ? "checked" : ""} />
+      <span>${escapeHtml(label)}</span>
+    </label>
+  `;
+}
+
+function getSelectedIteration(shadowRoot) {
+  const selected = shadowRoot.querySelector('input[name="rehash-iteration"]:checked');
+  return selected ? parseInt(selected.value, 10) : 1;
+}
+
+function getSelectedSchedule(shadowRoot) {
+  const selected = shadowRoot.querySelector('input[name="rehash-schedule"]:checked');
+  return selected ? selected.value : null;
+}
+
+function buildIsoDateFromToday(daysAhead) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + daysAhead);
+  return date.toISOString().slice(0, 10);
 }
 
 function closeSolvedModal() {
@@ -531,13 +1040,15 @@ function closeSolvedModal() {
   rehashState.modalShown = false;
 }
 
-function formatTimer(totalSeconds) {
+function formatTimer(totalMs) {
+  const totalSeconds = Math.floor(totalMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatDurationLabel(totalSeconds) {
+function formatDurationLabelFromMs(totalMs) {
+  const totalSeconds = Math.round(totalMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds}s`;
@@ -550,6 +1061,30 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function escapeAttribute(value) {
+  return String(value).replace(/"/g, "&quot;");
+}
+
+function ordinalLabel(value) {
+  if (value === 1) return "1st";
+  if (value === 2) return "2nd";
+  if (value === 3) return "3rd";
+  return `${value}th`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeProblemUrlFallback(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}/`;
+  } catch {
+    return url;
+  }
 }
 
 function sendRuntimeMessage(message) {
@@ -567,11 +1102,5 @@ function storageGet(key) {
 function storageSet(value) {
   return new Promise((resolve) => {
     chrome.storage.local.set(value, () => resolve());
-  });
-}
-
-function storageRemove(key) {
-  return new Promise((resolve) => {
-    chrome.storage.local.remove(key, () => resolve());
   });
 }

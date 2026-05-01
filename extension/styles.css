@@ -5,20 +5,20 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   color: #333;
   background: #f5f5f5;
-  width: 400px;
-  min-height: 500px;
+  width: 440px;
+  min-height: 620px;
 }
 
 .container {
-  background: white;
+  background: #fff;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-height: 620px;
 }
 
 header {
@@ -44,14 +44,14 @@ h3 {
 .progress-bar {
   height: 6px;
   background: #e0e0e0;
-  border-radius: 3px;
+  border-radius: 999px;
   overflow: hidden;
   margin-bottom: 6px;
 }
 
 .progress-fill {
   height: 100%;
-  background: #4caf50;
+  background: linear-gradient(90deg, #4caf50, #1f6feb);
   transition: width 0.3s ease;
 }
 
@@ -62,18 +62,27 @@ h3 {
 
 .tabs {
   display: flex;
+  gap: 2px;
+  padding: 0 6px;
   border-bottom: 1px solid #e0e0e0;
+  overflow-x: auto;
+  background: #fff;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-btn {
-  flex: 1;
-  padding: 12px;
+  flex: 0 0 auto;
+  padding: 12px 14px;
   border: none;
-  background: white;
+  background: #fff;
   cursor: pointer;
   font-size: 13px;
   color: #666;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -89,7 +98,7 @@ h3 {
 main {
   flex: 1;
   overflow-y: auto;
-  max-height: 400px;
+  max-height: 520px;
 }
 
 .tab-content {
@@ -101,23 +110,37 @@ main {
   display: block;
 }
 
+.section-intro {
+  margin-bottom: 12px;
+}
+
+.section-copy,
+.settings-meta,
+.queue-count {
+  font-size: 12px;
+  color: #666;
+}
+
 .problem-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.problem-card {
+.problem-card,
+.queue-card {
   border: 1px solid #e0e0e0;
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 12px;
   background: #fafafa;
 }
 
-.problem-header {
+.problem-header,
+.queue-header {
   display: flex;
   justify-content: space-between;
-  align-items: start;
+  align-items: flex-start;
+  gap: 10px;
   margin-bottom: 8px;
 }
 
@@ -133,27 +156,31 @@ main {
   text-decoration: underline;
 }
 
-.problem-site {
+.problem-site,
+.queue-step,
+.queue-badge,
+.queue-iteration,
+.problem-pill {
   font-size: 11px;
-  padding: 2px 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
   background: #e0e0e0;
-  border-radius: 3px;
-  color: #666;
-  margin-left: 8px;
+  color: #555;
 }
 
-.problem-meta {
+.problem-meta,
+.queue-meta {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
 }
 
 .difficulty {
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 3px;
+  padding: 3px 8px;
+  border-radius: 999px;
   font-weight: 500;
 }
 
@@ -183,12 +210,14 @@ main {
 }
 
 .bucket,
-.review-date {
+.review-date,
+.problem-subtle {
   font-size: 11px;
   color: #666;
 }
 
-.problem-topics {
+.problem-topics,
+.queue-topics {
   font-size: 11px;
   color: #888;
   margin-bottom: 8px;
@@ -197,25 +226,27 @@ main {
 .problem-notes {
   font-size: 12px;
   padding: 8px;
-  background: white;
-  border-radius: 4px;
+  background: #fff;
+  border-radius: 8px;
   margin-bottom: 8px;
   color: #555;
   white-space: pre-wrap;
 }
 
-.problem-actions {
+.problem-actions,
+.queue-actions,
+.settings-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .btn-sm {
-  padding: 4px 8px;
+  padding: 5px 9px;
   font-size: 11px;
   border: 1px solid #ccc;
-  background: white;
-  border-radius: 4px;
+  background: #fff;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -226,7 +257,7 @@ main {
 
 .btn-revised {
   background: #4caf50;
-  color: white;
+  color: #fff;
   border-color: #4caf50;
 }
 
@@ -243,6 +274,16 @@ main {
   background: #ffebee;
 }
 
+.btn-open {
+  background: #1976d2;
+  color: #fff;
+  border-color: #1976d2;
+}
+
+.btn-open:hover {
+  background: #1565c0;
+}
+
 .empty-state {
   text-align: center;
   padding: 40px 20px;
@@ -251,8 +292,34 @@ main {
 }
 
 .extract-section,
-.manual-section {
-  margin-bottom: 16px;
+.manual-section,
+.settings-section {
+  margin-bottom: 18px;
+}
+
+.queue-summary {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(31, 111, 235, 0.08), rgba(76, 175, 80, 0.08));
+  border: 1px solid rgba(31, 111, 235, 0.14);
+}
+
+.queue-progress {
+  display: grid;
+  gap: 4px;
+}
+
+.queue-badge.overdue {
+  background: #ffe0b2;
+  color: #e65100;
+}
+
+.queue-badge.due {
+  background: #e3f2fd;
+  color: #0d47a1;
 }
 
 .filter-bar {
@@ -271,7 +338,7 @@ main {
 
 .filter-chip {
   border: 1px solid #d0d7de;
-  background: white;
+  background: #fff;
   border-radius: 999px;
   color: #555;
   cursor: pointer;
@@ -287,7 +354,7 @@ main {
 .filter-chip.active {
   background: #1976d2;
   border-color: #1976d2;
-  color: white;
+  color: #fff;
 }
 
 hr {
@@ -298,17 +365,17 @@ hr {
 
 .input {
   width: 100%;
-  padding: 8px;
+  padding: 9px 10px;
   border: 1px solid #ccc;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 13px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .btn {
   padding: 8px 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
   transition: all 0.2s;
@@ -316,7 +383,7 @@ hr {
 
 .btn-primary {
   background: #1976d2;
-  color: white;
+  color: #fff;
 }
 
 .btn-primary:hover {
@@ -350,7 +417,7 @@ footer {
 .stat-card {
   background: #fafafa;
   border: 1px solid #e0e0e0;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 14px;
 }
 
@@ -362,6 +429,11 @@ footer {
   font-size: 22px;
   font-weight: 700;
   color: #1976d2;
+}
+
+.stat-value-small {
+  font-size: 16px;
+  line-height: 1.3;
 }
 
 .stats-list {
@@ -405,6 +477,107 @@ footer {
   font-weight: 600;
 }
 
+.speed-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.speed-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+}
+
+.speed-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.speed-card-title {
+  font-weight: 600;
+  color: #222;
+}
+
+.speed-trend {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.speed-trend.faster {
+  color: #2e7d32;
+}
+
+.speed-trend.slower {
+  color: #c62828;
+}
+
+.speed-trend.same {
+  color: #666;
+}
+
+.speed-details {
+  margin-top: 10px;
+  border-top: 1px solid #eee;
+  padding-top: 10px;
+}
+
+.speed-details summary {
+  cursor: pointer;
+  color: #1976d2;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.speed-details-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.speed-detail-row {
+  font-size: 12px;
+  color: #444;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.speed-detail-row strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.settings-section {
+  padding: 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.settings-section label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #666;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.checkbox-row input {
+  margin: 0;
+}
+
 .modal {
   display: none;
   position: fixed;
@@ -419,19 +592,11 @@ footer {
 }
 
 .modal-content {
-  background: white;
+  background: #fff;
   padding: 20px;
-  border-radius: 8px;
+  border-radius: 12px;
   width: 90%;
   max-width: 350px;
-}
-
-.modal-content label {
-  display: block;
-  margin-top: 12px;
-  margin-bottom: 4px;
-  font-size: 12px;
-  color: #666;
 }
 
 .modal-actions {
@@ -452,9 +617,9 @@ textarea.input {
   left: 50%;
   transform: translateX(-50%) translateY(100px);
   background: #333;
-  color: white;
+  color: #fff;
   padding: 12px 20px;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 13px;
   opacity: 0;
   transition: all 0.3s ease;

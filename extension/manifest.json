@@ -13,7 +13,8 @@
   ],
   "host_permissions": [
     "https://leetcode.com/*",
-    "https://codeforces.com/*"
+    "https://codeforces.com/*",
+    "https://api.github.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,12 +26,12 @@
   "content_scripts": [
     {
       "matches": ["https://leetcode.com/problems/*"],
-      "js": ["content-leetcode.js"],
+      "js": ["striver-sheet.js", "content-leetcode.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://codeforces.com/*"],
-      "js": ["content-codeforces.js"],
+      "js": ["striver-sheet.js", "content-codeforces.js"],
       "run_at": "document_idle"
     }
   ]
