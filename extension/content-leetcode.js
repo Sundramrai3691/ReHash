@@ -1081,7 +1081,12 @@ function clamp(value, min, max) {
 function normalizeProblemUrlFallback(url) {
   try {
     const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}/`;
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    const match = pathname.match(/^\/problems\/([^/]+)/i);
+    if (match) {
+      return `${parsed.origin}/problems/${match[1]}/`;
+    }
+    return `${parsed.origin}${pathname}/`;
   } catch {
     return url;
   }

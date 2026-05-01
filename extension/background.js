@@ -638,7 +638,30 @@ function generateId(site, url) {
 function normalizeProblemUrl(url) {
   try {
     const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}/`;
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+
+    if (/^\/problems\/[^/]+/i.test(pathname)) {
+      const match = pathname.match(/^\/problems\/([^/]+)/i);
+      if (match) {
+        return `${parsed.origin}/problems/${match[1]}/`;
+      }
+    }
+
+    if (/^\/contest\/\d+\/problem\/[A-Za-z0-9]+/i.test(pathname)) {
+      const match = pathname.match(/^\/contest\/(\d+)\/problem\/([A-Za-z0-9]+)/i);
+      if (match) {
+        return `${parsed.origin}/contest/${match[1]}/problem/${match[2]}`;
+      }
+    }
+
+    if (/^\/problemset\/problem\/\d+\/[A-Za-z0-9]+/i.test(pathname)) {
+      const match = pathname.match(/^\/problemset\/problem\/(\d+)\/([A-Za-z0-9]+)/i);
+      if (match) {
+        return `${parsed.origin}/problemset/problem/${match[1]}/${match[2]}`;
+      }
+    }
+
+    return `${parsed.origin}${pathname}/`;
   } catch {
     return url;
   }
