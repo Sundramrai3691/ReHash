@@ -797,11 +797,12 @@ async function sendDailyNotification() {
 
   chrome.notifications.create({
     type: "basic",
-    iconUrl:
-      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="75" font-size="75">R</text></svg>',
+    iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
     title: `ReHash: ${count} problem${count > 1 ? "s" : ""} due today`,
     message: preview + (count > 3 ? `\n...and ${count - 3} more` : ""),
     priority: 1,
+  }, () => {
+    void chrome.runtime.lastError;
   });
 }
 

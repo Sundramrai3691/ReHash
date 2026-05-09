@@ -3,6 +3,9 @@
   "name": "ReHash",
   "version": "1.0.0",
   "description": "Spaced repetition system for LeetCode and Codeforces problems",
+  "icons": {
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "storage",
     "alarms",
@@ -24,7 +27,10 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "ReHash"
+    "default_title": "ReHash",
+    "default_icon": {
+      "128": "icons/icon-128.png"
+    }
   },
   "content_scripts": [
     {
