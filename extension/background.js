@@ -15,14 +15,14 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "daily_reminder") {
-    void sendDailyNotification();
-    void scheduleDailyReminderAlarm();
+    sendDailyNotification().catch(() => {});
+    scheduleDailyReminderAlarm().catch(() => {});
     return;
   }
 
   if (alarm.name === "rehash-daily-sync") {
-    void runAutoSyncIfEnabled();
-    void scheduleDailySyncAlarm();
+    runAutoSyncIfEnabled().catch(() => {});
+    scheduleDailySyncAlarm().catch(() => {});
   }
 });
 
@@ -795,14 +795,25 @@ async function sendDailyNotification() {
     .map((problem) => problem.title)
     .join("\n");
 
-  chrome.notifications.create({
+  await createNotificationSafe({
     type: "basic",
-    iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
+    iconUrl: "icons/icon-128.png",
     title: `ReHash: ${count} problem${count > 1 ? "s" : ""} due today`,
     message: preview + (count > 3 ? `\n...and ${count - 3} more` : ""),
     priority: 1,
-  }, () => {
-    void chrome.runtime.lastError;
+  });
+}
+
+function createNotificationSafe(options) {
+  return new Promise((resolve) => {
+    try {
+      chrome.notifications.create(options, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
   });
 }
 
