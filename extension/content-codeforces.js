@@ -10,8 +10,10 @@
     acceptedHandled: false,
     currentInfo: null,
     currentStriverEntry: null,
+    dragSession: null,
     elapsed: 0,
     intervalId: null,
+    justDragged: false,
     modalShown: false,
     observer: null,
     paused: false,
@@ -96,32 +98,47 @@
     const host = document.createElement("div");
     host.id = WIDGET_HOST_ID;
     host.style.position = "fixed";
-    host.style.right = "20px";
-    host.style.bottom = "20px";
-    host.style.zIndex = "9999";
+    host.style.zIndex = "2147483647";
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `
       <style>
-        .rh-widget{width:268px;background:#1e1e2e;color:#cdd6f4;border:1px solid rgba(203,166,247,.22);border-radius:8px;padding:12px;box-shadow:0 18px 36px rgba(0,0,0,.35);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:12px}
-        .rh-label{color:#cba6f7;font-weight:700;margin-bottom:6px}.rh-title{font-weight:650;margin-bottom:8px;max-height:36px;overflow:hidden}.rh-solve-info{background:#181825;border:1px solid rgba(137,180,250,.25);border-radius:8px;padding:7px 8px;margin-bottom:10px;color:#89b4fa}
-        .rh-row{display:flex;align-items:center;gap:8px}.rh-time{margin-left:auto;font-size:22px;font-weight:800;color:#89b4fa;letter-spacing:.04em}.rh-time.paused{color:#f9e2af}.rh-btn{border:0;border-radius:8px;background:#313244;color:#cdd6f4;padding:8px 10px;font-weight:700;cursor:pointer}.rh-btn:hover{background:#45475a}.rh-btn.primary{background:#89b4fa;color:#11111b}.rh-btn.done{background:#f38ba8;color:#11111b}
+        :host{all:initial}
+        .rh-shell{width:220px;min-height:148px;background:#0f0f1a;color:#e2e8f0;border:1px solid rgba(255,255,255,.08);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.4);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:12px;line-height:1.35;overflow:visible;transition:all .25s cubic-bezier(.4,0,.2,1)}
+        .rh-shell.collapsed{width:48px;min-height:48px;border-radius:50%}
+        .rh-panel{display:grid;gap:8px;padding:10px}.rh-shell.collapsed .rh-panel{display:none}
+        .rh-fab{display:none;width:48px;height:48px;border:0;border-radius:50%;background:#0f0f1a;color:#f59e0b;align-items:center;justify-content:center;cursor:grab;padding:0}.rh-shell.collapsed .rh-fab{display:flex}.rh-fab:active,.rh-header.dragging{cursor:grabbing}
+        .rh-shell.running.collapsed .rh-fab{animation:pulse-ring 1.8s infinite}
+        @keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(245,158,11,.4)}70%{box-shadow:0 0 0 8px rgba(245,158,11,0)}100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}}
+        .rh-header{display:flex;align-items:center;gap:6px;cursor:grab;min-width:0}.rh-brand{display:flex;align-items:center;gap:5px;font-weight:800;color:#f8fafc;white-space:nowrap}.rh-title{min-width:0;flex:1;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .rh-collapse,.rh-icon-btn{width:28px;height:28px;border:0;border-radius:10px;background:rgba(255,255,255,.06);color:#e2e8f0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.rh-collapse:hover,.rh-icon-btn:hover:not(:disabled){background:rgba(255,255,255,.12)}
+        .rh-solve-info{color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rh-time{font-family:'JetBrains Mono','SFMono-Regular',Consolas,monospace;font-size:30px;font-weight:800;line-height:1;text-align:center;color:#f59e0b;letter-spacing:.02em}.rh-time.paused{color:#fbbf24}
+        .rh-controls{display:flex;justify-content:center;gap:10px}.rh-icon-btn:disabled{opacity:.38;cursor:default}.rh-icon{width:15px;height:15px;display:block}.rh-fab .rh-icon{width:22px;height:22px}
+        [data-tooltip]{position:relative}[data-tooltip]::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:#e2e8f0;padding:3px 8px;border-radius:4px;font-size:11px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}[data-tooltip]:hover::after{opacity:1}
       </style>
-      <div class="rh-widget">
-        <div class="rh-label">ReHash timer</div>
-        <div class="rh-title" id="rh-title">Loading problem...</div>
-        <div class="rh-solve-info" id="rh-solve-info">Solve 1 of this problem</div>
-        <div class="rh-row">
-          <button class="rh-btn primary" id="rh-start" type="button">Start</button>
-          <button class="rh-btn" id="rh-pause" type="button" disabled>Pause</button>
-          <button class="rh-btn done" id="rh-done" type="button">Done</button>
+      <div class="rh-shell" id="rh-shell">
+        <button class="rh-fab" id="rh-fab" type="button" aria-label="Open ReHash" data-tooltip="Open ReHash">${iconSvg("hash")}</button>
+        <div class="rh-panel">
+          <div class="rh-header" id="rh-drag-handle">
+            <div class="rh-brand">${iconSvg("clock")}<span>ReHash</span></div>
+            <div class="rh-title" id="rh-title">Loading problem...</div>
+            <button class="rh-collapse" id="rh-collapse" type="button" aria-label="Collapse ReHash" data-tooltip="Collapse">${iconSvg("minus")}</button>
+          </div>
+          <div class="rh-solve-info" id="rh-solve-info">Solve 1 of this problem</div>
           <div class="rh-time" id="rh-time">00:00</div>
+          <div class="rh-controls">
+            <button class="rh-icon-btn" id="rh-start" type="button" aria-label="Start" data-tooltip="Start">${iconSvg("play")}</button>
+            <button class="rh-icon-btn" id="rh-pause" type="button" aria-label="Pause" data-tooltip="Pause" disabled>${iconSvg("pause")}</button>
+            <button class="rh-icon-btn" id="rh-done" type="button" aria-label="Done" data-tooltip="Done">${iconSvg("check")}</button>
+          </div>
         </div>
       </div>`;
     document.documentElement.appendChild(host);
 
+    initializeWidgetFrame(host, shadow);
     shadow.getElementById("rh-start").addEventListener("click", startTimer);
     shadow.getElementById("rh-pause").addEventListener("click", togglePause);
     shadow.getElementById("rh-done").addEventListener("click", () => stopTimerAndOpenModal());
+    shadow.getElementById("rh-collapse").addEventListener("click", () => setWidgetCollapsed(true));
   }
 
   function updateWidgetProblem(problem) {
@@ -140,6 +157,149 @@
   function renderSolveInfo() {
     const info = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-solve-info");
     if (info) info.textContent = `Solve ${state.currentInfo?.nextIteration || 1} of this problem`;
+  }
+
+  function initializeWidgetFrame(host, shadow) {
+    const collapsed = readWidgetCollapsed();
+    applyWidgetCollapsed(collapsed);
+    restoreWidgetPosition(host, collapsed);
+    initializeWidgetDragging(host, shadow.getElementById("rh-drag-handle"));
+    initializeWidgetDragging(host, shadow.getElementById("rh-fab"));
+    shadow.getElementById("rh-fab").addEventListener("click", () => {
+      if (state.justDragged) {
+        state.justDragged = false;
+        return;
+      }
+      setWidgetCollapsed(false);
+    });
+    window.addEventListener("resize", () => clampAndPersistWidgetPosition(host));
+  }
+
+  function setWidgetCollapsed(collapsed) {
+    sessionStorage.setItem(getCollapsedKey(), collapsed ? "1" : "0");
+    applyWidgetCollapsed(collapsed);
+    const host = document.getElementById(WIDGET_HOST_ID);
+    if (host && !readWidgetPosition()) {
+      applyDefaultWidgetPosition(host, collapsed);
+    }
+    if (host) clampAndPersistWidgetPosition(host);
+  }
+
+  function applyWidgetCollapsed(collapsed) {
+    const shell = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-shell");
+    if (!shell) return;
+    shell.classList.toggle("collapsed", collapsed);
+    updateWidgetRunningClass();
+  }
+
+  function readWidgetCollapsed() {
+    const value = sessionStorage.getItem(getCollapsedKey());
+    return value === null ? true : value === "1";
+  }
+
+  function initializeWidgetDragging(host, handle) {
+    if (!handle) return;
+    handle.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      const rect = host.getBoundingClientRect();
+      const drag = {
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        moved: false,
+      };
+      state.dragSession = drag;
+      handle.classList.add("dragging");
+      event.preventDefault();
+
+      const onMove = (moveEvent) => {
+        if (!state.dragSession) return;
+        drag.moved = drag.moved || Math.abs(moveEvent.clientX - event.clientX) > 3 || Math.abs(moveEvent.clientY - event.clientY) > 3;
+        const size = getWidgetSize(host);
+        const x = clamp(moveEvent.clientX - drag.offsetX, 8, Math.max(8, window.innerWidth - size.width - 8));
+        const y = clamp(moveEvent.clientY - drag.offsetY, 8, Math.max(8, window.innerHeight - size.height - 8));
+        host.style.left = `${x}px`;
+        host.style.top = `${y}px`;
+        host.style.right = "auto";
+        host.style.bottom = "auto";
+      };
+
+      const onUp = () => {
+        handle.classList.remove("dragging");
+        state.justDragged = Boolean(drag.moved);
+        state.dragSession = null;
+        persistWidgetPosition(host);
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        window.setTimeout(() => {
+          state.justDragged = false;
+        }, 0);
+      };
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  function restoreWidgetPosition(host, collapsed) {
+    const saved = readWidgetPosition();
+    if (saved) {
+      host.style.left = `${saved.x}px`;
+      host.style.top = `${saved.y}px`;
+      host.style.right = "auto";
+      host.style.bottom = "auto";
+      clampAndPersistWidgetPosition(host);
+      return;
+    }
+    applyDefaultWidgetPosition(host, collapsed);
+  }
+
+  function applyDefaultWidgetPosition(host, collapsed) {
+    const width = collapsed ? 48 : 220;
+    const height = collapsed ? 48 : 160;
+    const x = collapsed ? window.innerWidth - 68 : window.innerWidth - 240;
+    const y = collapsed ? window.innerHeight - 68 : 80;
+    host.style.left = `${clamp(x, 8, Math.max(8, window.innerWidth - width - 8))}px`;
+    host.style.top = `${clamp(y, 8, Math.max(8, window.innerHeight - height - 8))}px`;
+    host.style.right = "auto";
+    host.style.bottom = "auto";
+  }
+
+  function clampAndPersistWidgetPosition(host) {
+    const size = getWidgetSize(host);
+    const currentX = parseFloat(host.style.left || "0");
+    const currentY = parseFloat(host.style.top || "0");
+    host.style.left = `${clamp(currentX, 8, Math.max(8, window.innerWidth - size.width - 8))}px`;
+    host.style.top = `${clamp(currentY, 8, Math.max(8, window.innerHeight - size.height - 8))}px`;
+    persistWidgetPosition(host);
+  }
+
+  function persistWidgetPosition(host) {
+    const x = Math.round(parseFloat(host.style.left || "0"));
+    const y = Math.round(parseFloat(host.style.top || "0"));
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      sessionStorage.setItem(getPositionKey(), JSON.stringify({ x, y }));
+    }
+  }
+
+  function readWidgetPosition() {
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem(getPositionKey()) || "null");
+      if (Number.isFinite(parsed?.x) && Number.isFinite(parsed?.y)) return parsed;
+    } catch {}
+    return null;
+  }
+
+  function getWidgetSize(host) {
+    const rect = host.getBoundingClientRect();
+    return {
+      width: Math.max(48, rect.width || (readWidgetCollapsed() ? 48 : 220)),
+      height: Math.max(48, rect.height || (readWidgetCollapsed() ? 48 : 160)),
+    };
+  }
+
+  function updateWidgetRunningClass() {
+    const shell = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-shell");
+    if (shell) shell.classList.toggle("running", state.running && !state.paused);
   }
 
   function startTimer() {
@@ -191,6 +351,7 @@
     if (!display) return;
     display.textContent = formatTimer(getDisplayElapsed());
     display.classList.toggle("paused", state.paused);
+    updateWidgetRunningClass();
   }
 
   function updateControls() {
@@ -200,7 +361,10 @@
     if (!start || !pause) return;
     start.disabled = state.running || state.paused || state.elapsed > 0;
     pause.disabled = !state.running && !state.paused;
-    pause.textContent = state.paused ? "Resume" : "Pause";
+    pause.innerHTML = state.paused ? iconSvg("play") : iconSvg("pause");
+    pause.dataset.tooltip = state.paused ? "Resume" : "Pause";
+    pause.setAttribute("aria-label", state.paused ? "Resume" : "Pause");
+    updateWidgetRunningClass();
   }
 
   function getDisplayElapsed() {
@@ -451,6 +615,14 @@
     return `rehash_timer_state::${SITE}::${slugFromUrl(url)}`;
   }
 
+  function getCollapsedKey() {
+    return `rehash_collapsed_${slugFromUrl(extractProblem().url)}`;
+  }
+
+  function getPositionKey() {
+    return `rehash_pos_${slugFromUrl(extractProblem().url)}`;
+  }
+
   function slugFromUrl(url) {
     try {
       return new URL(url).pathname.replace(/^\/+|\/+$/g, "").replace(/[^a-z0-9_-]+/gi, "_");
@@ -480,6 +652,22 @@
     const minutes = Math.floor(totalSecs / 60);
     const seconds = totalSecs % 60;
     return `${minutes}m ${seconds}s`;
+  }
+
+  function iconSvg(name) {
+    const icons = {
+      hash: '<svg class="rh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16"/><path d="M4 15h16"/><path d="M10 3 8 21"/><path d="m16 3-2 18"/></svg>',
+      clock: '<svg class="rh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+      play: '<svg class="rh-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+      pause: '<svg class="rh-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
+      check: '<svg class="rh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>',
+      minus: '<svg class="rh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 12h12"/></svg>',
+    };
+    return icons[name] || icons.hash;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
   }
 
   function escapeHtml(value) {
