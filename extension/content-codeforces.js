@@ -1,797 +1,492 @@
-const REHASH_CF_WIDGET_HOST_ID = "rehash-cf-timer-host";
-const REHASH_CF_MODAL_HOST_ID = "rehash-cf-modal-host";
-const REHASH_CF_ACTIVE_KEY = "rehash_active_codeforces_timer";
-const REHASH_CF_STRIVER_BANNER_ID = "rehash-cf-striver-banner";
+(function () {
+  const SITE = "codeforces";
+  const WIDGET_HOST_ID = "rehash-cf-timer-host";
+  const MODAL_HOST_ID = "rehash-cf-modal-host";
+  const ACTIVE_KEY = "rehash_active_codeforces_timer";
+  const STRIVER_BANNER_ID = "rehash-cf-striver-banner";
+  const PERSIST_MS = 30000;
 
-const rehashCfState = {
-  acceptFlowPending: false,
-  currentSolveCount: 0,
-  currentStriverEntry: null,
-  elapsedSeconds: 0,
-  modalShown: false,
-  notionOpened: false,
-  observer: null,
-  startTime: null,
-  timerInterval: null,
-  timerRunning: false,
-};
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "extract_problem") {
-    sendResponse(extractCodeforcesProblem());
-  }
-  return true;
-});
-
-initializeCodeforcesRehash().catch(() => {
-  // Keep extraction working even if timer bootstrapping fails.
-});
-
-async function initializeCodeforcesRehash() {
-  if (!document.body) {
-    return;
-  }
-
-  await initializeStriverContext();
-
-  if (isProblemPage()) {
-    injectTimerWidget();
-    updateWidgetProblem(extractCodeforcesProblem());
-    await restoreTimerStateForCurrentProblem();
-  }
-
-  setupAcceptedObserver();
-}
-
-function extractCodeforcesProblem() {
-  const title = extractTitle();
-  const tags = extractTags();
-  const difficulty = extractDifficulty();
-  const striverEntry = rehashCfState.currentStriverEntry || findStriverEntryForCurrentPage();
-
-  return {
-    title,
-    url: normalizeProblemUrl(window.location.href),
-    site: "codeforces",
-    difficulty,
-    tags,
-    striverId: striverEntry?.id || null,
-    striverStep: striverEntry?.step || null,
-    striverTopic: striverEntry?.topic || null,
-  };
-}
-
-function extractTitle() {
-  const selectors = [
-    ".problem-statement .title",
-    ".title",
-    "div.header .title",
-  ];
-
-  for (const selector of selectors) {
-    const element = document.querySelector(selector);
-    if (element && element.textContent.trim()) {
-      return element.textContent.trim();
-    }
-  }
-
-  const title = document.title.trim();
-  if (title && title !== "Codeforces") {
-    return title.split(" - ")[0].trim();
-  }
-
-  return "Unknown Problem";
-}
-
-function extractTags() {
-  const tags = [];
-  const selectors = [
-    ".problem-statement .tag-box",
-    ".tag-box",
-    ".roundbox .tags a",
-    'a[href*="/problemset?tags="]',
-  ];
-
-  for (const selector of selectors) {
-    const elements = document.querySelectorAll(selector);
-    elements.forEach((el) => {
-      const text = el.textContent.trim();
-      if (text && !text.startsWith("*") && !tags.includes(text)) {
-        tags.push(text);
-      }
-    });
-
-    if (tags.length > 0) break;
-  }
-
-  return tags.slice(0, 10);
-}
-
-function extractDifficulty() {
-  const tagBoxes = document.querySelectorAll(".tag-box");
-  for (const box of tagBoxes) {
-    const text = `${box.textContent || ""} ${box.getAttribute("title") || ""}`;
-    const ratingMatch = text.match(/\*\s*(\d{3,4})/);
-    if (ratingMatch) {
-      return ratingMatch[1];
-    }
-  }
-
-  const ratingContainers = document.querySelectorAll(".roundbox, .property-title, .header .title");
-  for (const element of ratingContainers) {
-    const text = element.textContent.trim();
-    if (/rating/i.test(text)) {
-      const ratingMatch = text.match(/(\d{3,4})/);
-      if (ratingMatch) {
-        return ratingMatch[1];
-      }
-    }
-  }
-
-  return "Unknown";
-}
-
-function isProblemPage() {
-  return (
-    /^https:\/\/codeforces\.com\/problemset\/problem\/\d+\/[A-Za-z0-9]+/.test(window.location.href) ||
-    /^https:\/\/codeforces\.com\/contest\/\d+\/problem\/[A-Za-z0-9]+/.test(window.location.href)
-  );
-}
-
-function isSubmissionPage() {
-  return /\/(status|submission|submissions)\b/.test(window.location.pathname);
-}
-
-function timerKeyForProblem(problemUrl) {
-  return `timer_${normalizeProblemUrl(problemUrl)}`;
-}
-
-async function initializeStriverContext() {
-  rehashCfState.currentStriverEntry = findStriverEntryForCurrentPage();
-  rehashCfState.currentSolveCount = await getSolveCountForProblem(normalizeProblemUrl(window.location.href));
-  renderStriverBannerWithRetry();
-}
-
-function injectTimerWidget() {
-  if (document.getElementById(REHASH_CF_WIDGET_HOST_ID)) {
-    return;
-  }
-
-  const host = document.createElement("div");
-  host.id = REHASH_CF_WIDGET_HOST_ID;
-  const shadow = host.attachShadow({ mode: "open" });
-
-  shadow.innerHTML = `
-    <style>
-      .rehash-widget {
-        position: fixed;
-        right: 20px;
-        bottom: 20px;
-        z-index: 9999;
-        width: 240px;
-        background: #1a1a2e;
-        color: #ffffff;
-        border-radius: 12px;
-        padding: 12px 16px;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-        font-size: 12px;
-        line-height: 1.45;
-      }
-
-      .rehash-title {
-        font-weight: 600;
-        margin-bottom: 10px;
-        max-height: 34px;
-        overflow: hidden;
-      }
-
-      .rehash-controls {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }
-
-      .rehash-button {
-        border: none;
-        border-radius: 999px;
-        background: #0f3460;
-        color: #ffffff;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 600;
-        padding: 7px 12px;
-      }
-
-      .rehash-button:hover {
-        background: #17568c;
-      }
-
-      .rehash-button.stop {
-        background: #b33939;
-      }
-
-      .rehash-button.stop:hover {
-        background: #cf4a4a;
-      }
-
-      .rehash-timer {
-        font-size: 18px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        min-width: 58px;
-        text-align: right;
-      }
-    </style>
-    <div class="rehash-widget">
-      <div class="rehash-title" id="rehash-problem-title">Loading problem...</div>
-      <div class="rehash-controls">
-        <button class="rehash-button" id="rehash-toggle-button">▶ Start Timer</button>
-        <div class="rehash-timer" id="rehash-timer-display">00:00</div>
-      </div>
-    </div>
-  `;
-
-  document.documentElement.appendChild(host);
-
-  shadow.getElementById("rehash-toggle-button").addEventListener("click", () => {
-    if (rehashCfState.timerRunning) {
-      stopTimer({ showModal: true });
-    } else {
-      startTimer();
-    }
-  });
-}
-
-function updateWidgetProblem(problem) {
-  const host = document.getElementById(REHASH_CF_WIDGET_HOST_ID);
-  const titleEl = host?.shadowRoot?.getElementById("rehash-problem-title");
-  if (titleEl) {
-    titleEl.textContent = problem.title || "Unknown Problem";
-  }
-}
-
-function updateTimerDisplay(totalSeconds) {
-  const host = document.getElementById(REHASH_CF_WIDGET_HOST_ID);
-  const timerEl = host?.shadowRoot?.getElementById("rehash-timer-display");
-  if (timerEl) {
-    timerEl.textContent = formatTimer(totalSeconds);
-  }
-}
-
-function updateTimerButton() {
-  const host = document.getElementById(REHASH_CF_WIDGET_HOST_ID);
-  const button = host?.shadowRoot?.getElementById("rehash-toggle-button");
-  if (!button) {
-    return;
-  }
-
-  button.textContent = rehashCfState.timerRunning ? "⏹ Stop" : "▶ Start Timer";
-  button.classList.toggle("stop", rehashCfState.timerRunning);
-}
-
-async function restoreTimerStateForCurrentProblem() {
-  const problem = extractCodeforcesProblem();
-  const timerKey = timerKeyForProblem(problem.url);
-  const saved = await storageGet(timerKey);
-  const timerState = saved[timerKey];
-
-  if (!timerState) {
-    updateTimerButton();
-    updateTimerDisplay(0);
-    return;
-  }
-
-  if (timerState.problemTitle) {
-    updateWidgetProblem({ title: timerState.problemTitle });
-  }
-
-  if (timerState.running && timerState.startTime) {
-    rehashCfState.startTime = timerState.startTime;
-    rehashCfState.timerRunning = true;
-    await storageSet({
-      [REHASH_CF_ACTIVE_KEY]: {
-        difficulty: timerState.difficulty || problem.difficulty,
-        problemTitle: timerState.problemTitle,
-        site: "codeforces",
-        tags: timerState.tags || problem.tags,
-        timerKey,
-        url: problem.url,
-      },
-    });
-    beginTimerTick();
-  } else {
-    rehashCfState.elapsedSeconds = timerState.elapsedSeconds || 0;
-    updateTimerDisplay(rehashCfState.elapsedSeconds);
-  }
-
-  updateTimerButton();
-}
-
-async function startTimer() {
-  if (!isProblemPage()) {
-    return;
-  }
-
-  const problem = extractCodeforcesProblem();
-  const timerKey = timerKeyForProblem(problem.url);
-  updateWidgetProblem(problem);
-
-  rehashCfState.elapsedSeconds = 0;
-  rehashCfState.modalShown = false;
-  rehashCfState.notionOpened = false;
-  rehashCfState.startTime = Date.now();
-  rehashCfState.timerRunning = true;
-
-  await storageSet({
-    [timerKey]: {
-      difficulty: problem.difficulty,
-      elapsedSeconds: 0,
-      problemTitle: problem.title,
-      running: true,
-      site: problem.site,
-      startTime: rehashCfState.startTime,
-      tags: problem.tags,
-      url: problem.url,
-    },
-    [REHASH_CF_ACTIVE_KEY]: {
-      difficulty: problem.difficulty,
-      problemTitle: problem.title,
-      site: problem.site,
-      tags: problem.tags,
-      timerKey,
-      url: problem.url,
-    },
-  });
-
-  beginTimerTick();
-  updateTimerButton();
-}
-
-function beginTimerTick() {
-  clearInterval(rehashCfState.timerInterval);
-
-  const tick = () => {
-    if (!rehashCfState.startTime) {
-      return;
-    }
-
-    rehashCfState.elapsedSeconds = Math.max(
-      0,
-      Math.floor((Date.now() - rehashCfState.startTime) / 1000),
-    );
-    updateTimerDisplay(rehashCfState.elapsedSeconds);
+  const state = {
+    acceptedHandled: false,
+    currentInfo: null,
+    currentStriverEntry: null,
+    elapsed: 0,
+    intervalId: null,
+    modalShown: false,
+    observer: null,
+    paused: false,
+    persistId: null,
+    running: false,
+    startWallTime: null,
   };
 
-  tick();
-  rehashCfState.timerInterval = window.setInterval(tick, 1000);
-}
-
-async function stopTimer({ showModal, problem, timerState }) {
-  const activeProblem = problem || (await getActiveProblemContext());
-  if (!activeProblem) {
-    return;
-  }
-
-  const timerKey = timerKeyForProblem(activeProblem.url);
-  const savedState = timerState || (await storageGet(timerKey))[timerKey];
-
-  if (!savedState && !rehashCfState.timerRunning && rehashCfState.elapsedSeconds === 0) {
-    return;
-  }
-
-  if (savedState?.running && savedState.startTime) {
-    rehashCfState.elapsedSeconds = Math.max(
-      0,
-      Math.floor((Date.now() - savedState.startTime) / 1000),
-    );
-  } else if (rehashCfState.timerRunning && rehashCfState.startTime) {
-    rehashCfState.elapsedSeconds = Math.max(
-      0,
-      Math.floor((Date.now() - rehashCfState.startTime) / 1000),
-    );
-  } else {
-    rehashCfState.elapsedSeconds = savedState?.elapsedSeconds || rehashCfState.elapsedSeconds;
-  }
-
-  clearInterval(rehashCfState.timerInterval);
-  rehashCfState.timerInterval = null;
-  rehashCfState.timerRunning = false;
-  rehashCfState.startTime = null;
-
-  await storageSet({
-    [timerKey]: {
-      difficulty: activeProblem.difficulty,
-      elapsedSeconds: rehashCfState.elapsedSeconds,
-      problemTitle: activeProblem.title,
-      running: false,
-      site: activeProblem.site,
-      tags: activeProblem.tags,
-      url: activeProblem.url,
-    },
-    [REHASH_CF_ACTIVE_KEY]: {
-      difficulty: activeProblem.difficulty,
-      problemTitle: activeProblem.title,
-      site: activeProblem.site,
-      tags: activeProblem.tags,
-      timerKey,
-      url: activeProblem.url,
-    },
-  });
-
-  updateTimerDisplay(rehashCfState.elapsedSeconds);
-  updateTimerButton();
-
-  if (showModal) {
-    await openSolvedModal(activeProblem, rehashCfState.elapsedSeconds);
-  }
-}
-
-function setupAcceptedObserver() {
-  if (rehashCfState.observer || !document.body) {
-    return;
-  }
-
-  rehashCfState.observer = new MutationObserver(() => {
-    void handleAcceptedFlow();
-  });
-
-  rehashCfState.observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-  });
-
-  if (isSubmissionPage()) {
-    void handleAcceptedFlow();
-  }
-}
-
-async function handleAcceptedFlow() {
-  if (rehashCfState.acceptFlowPending || rehashCfState.modalShown || !hasAcceptedVerdict()) {
-    return;
-  }
-
-  rehashCfState.acceptFlowPending = true;
-
-  try {
-    const activeProblem = await getActiveProblemContext();
-    if (!activeProblem) {
-      return;
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "extract_problem") {
+      sendResponse(extractProblem());
     }
-
-    const timerKey = timerKeyForProblem(activeProblem.url);
-    const timerState = (await storageGet(timerKey))[timerKey];
-    if (!timerState || (!timerState.running && !timerState.elapsedSeconds)) {
-      return;
-    }
-
-    await stopTimer({
-      problem: activeProblem,
-      showModal: true,
-      timerState,
-    });
-  } finally {
-    rehashCfState.acceptFlowPending = false;
-  }
-}
-
-function hasAcceptedVerdict() {
-  if (document.querySelector(".verdict-accepted")) {
     return true;
-  }
-
-  if (isSubmissionPage() && /accepted/i.test(document.body?.innerText || "")) {
-    return true;
-  }
-
-  return false;
-}
-
-async function getActiveProblemContext() {
-  if (isProblemPage()) {
-    return extractCodeforcesProblem();
-  }
-
-  const stored = await storageGet(REHASH_CF_ACTIVE_KEY);
-  const active = stored[REHASH_CF_ACTIVE_KEY];
-  if (!active || !active.url) {
-    return null;
-  }
-
-  return {
-    difficulty: active.difficulty || "Unknown",
-    site: "codeforces",
-    tags: Array.isArray(active.tags) ? active.tags : [],
-    title: active.problemTitle || "Unknown Problem",
-    url: active.url,
-  };
-}
-
-async function openSolvedModal(problem, elapsedSeconds) {
-  if (rehashCfState.modalShown || document.getElementById(REHASH_CF_MODAL_HOST_ID)) {
-    return;
-  }
-
-  rehashCfState.modalShown = true;
-  rehashCfState.notionOpened = false;
-
-  const response = await sendRuntimeMessage({ action: "GET_NOTION_URL" });
-  const notionUrl = response?.notionUrl || "https://www.notion.so";
-  const host = document.createElement("div");
-  host.id = REHASH_CF_MODAL_HOST_ID;
-  const shadow = host.attachShadow({ mode: "open" });
-  const tags = Array.isArray(problem.tags) ? problem.tags : [];
-
-  shadow.innerHTML = `
-    <style>
-      .rehash-overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 10000;
-        background: rgba(0, 0, 0, 0.55);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-      }
-
-      .rehash-modal {
-        width: min(420px, 100%);
-        background: #1a1a2e;
-        color: #ffffff;
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-      }
-
-      .rehash-heading {
-        font-size: 22px;
-        font-weight: 700;
-        margin-bottom: 8px;
-      }
-
-      .rehash-subtitle,
-      .rehash-time,
-      .rehash-tags {
-        font-size: 13px;
-        margin-bottom: 10px;
-        color: #e4e6f0;
-      }
-
-      .rehash-textarea {
-        width: 100%;
-        min-height: 96px;
-        border: 1px solid #34495e;
-        border-radius: 12px;
-        padding: 12px;
-        background: #111827;
-        color: #ffffff;
-        font: inherit;
-        resize: vertical;
-        box-sizing: border-box;
-        margin-bottom: 14px;
-      }
-
-      .rehash-actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-
-      .rehash-action {
-        border: none;
-        border-radius: 999px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        padding: 10px 14px;
-      }
-
-      .rehash-action.notion {
-        background: #ffffff;
-        color: #111827;
-      }
-
-      .rehash-action.save {
-        background: #4caf50;
-        color: #ffffff;
-      }
-    </style>
-    <div class="rehash-overlay">
-      <div class="rehash-modal">
-        <div class="rehash-heading">✅ Problem Solved!</div>
-        <div class="rehash-subtitle">${escapeHtml(problem.title)}</div>
-        <div class="rehash-time">Time: ${formatDurationLabel(elapsedSeconds)}</div>
-        <div class="rehash-tags">Topics: ${escapeHtml(tags.join(", ") || "None")}</div>
-        <textarea class="rehash-textarea" id="rehash-note-input" placeholder="Quick note / mistake? (optional)"></textarea>
-        <div class="rehash-actions">
-          <button class="rehash-action notion" id="rehash-open-notion">📝 Open Notion Log</button>
-          <button class="rehash-action save" id="rehash-save-close">✔ Save & Close</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  document.documentElement.appendChild(host);
-
-  shadow.getElementById("rehash-open-notion").addEventListener("click", async () => {
-    await sendRuntimeMessage({ action: "OPEN_NOTION_URL", url: notionUrl });
-    rehashCfState.notionOpened = true;
   });
 
-  shadow.getElementById("rehash-save-close").addEventListener("click", async () => {
-    const note = shadow.getElementById("rehash-note-input").value.trim();
-    await sendRuntimeMessage({
-      action: "SAVE_SESSION",
-      session: {
-        date: new Date().toISOString(),
-        notionOpened: rehashCfState.notionOpened,
-        note,
-        problemTitle: problem.title,
-        site: problem.site,
-        tags,
-        timeTaken: elapsedSeconds,
-        url: problem.url,
-      },
-    });
+  initialize().catch(() => {});
 
-    rehashCfState.currentSolveCount += 1;
+  async function initialize() {
+    if (!document.body || !isProblemPage()) return;
+
+    state.currentStriverEntry = findStriverEntryForCurrentPage();
+    injectWidget();
+    updateWidgetProblem(extractProblem());
+    await refreshProblemInfo();
     renderStriverBannerWithRetry();
-    await clearTimerState(problem.url);
-    closeSolvedModal();
-  });
-}
-
-async function clearTimerState(problemUrl) {
-  clearInterval(rehashCfState.timerInterval);
-  rehashCfState.timerInterval = null;
-  rehashCfState.timerRunning = false;
-  rehashCfState.startTime = null;
-  rehashCfState.elapsedSeconds = 0;
-  updateTimerButton();
-  updateTimerDisplay(0);
-
-  const timerKey = timerKeyForProblem(problemUrl);
-  await storageRemove([timerKey, REHASH_CF_ACTIVE_KEY]);
-}
-
-function closeSolvedModal() {
-  document.getElementById(REHASH_CF_MODAL_HOST_ID)?.remove();
-  rehashCfState.modalShown = false;
-}
-
-function formatTimer(totalSeconds) {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function formatDurationLabel(totalSeconds) {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${seconds}s`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function sendRuntimeMessage(message) {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (response) => resolve(response));
-  });
-}
-
-function findStriverEntryForCurrentPage() {
-  return window.STRIVER_SHEET_UTILS?.findByProblemUrl?.(normalizeProblemUrl(window.location.href)) || null;
-}
-
-async function getSolveCountForProblem(problemUrl) {
-  const normalizedTarget = normalizeProblemUrl(problemUrl);
-  const solvedSessions = (await storageGet("solvedSessions")).solvedSessions;
-  const sessions = Array.isArray(solvedSessions) ? solvedSessions : [];
-
-  return sessions.filter((session) =>
-    normalizeProblemUrl(session.problemUrl || session.url || "") === normalizedTarget,
-  ).length;
-}
-
-function renderStriverBannerWithRetry(attempt = 0) {
-  if (!rehashCfState.currentStriverEntry || !isProblemPage()) {
-    return;
+    restoreTimerState();
+    setupAcceptedObserver();
+    window.addEventListener("beforeunload", persistTimerState);
+    document.addEventListener("visibilitychange", () => {
+      persistTimerState();
+      if (!document.hidden) {
+        restoreTimerState();
+      }
+    });
+    startPeriodicPersistence();
   }
 
-  const titleElement = document.querySelector(".problem-statement .title") || document.querySelector(".title");
-  if (!titleElement) {
-    if (attempt < 12) {
-      window.setTimeout(() => renderStriverBannerWithRetry(attempt + 1), 400);
+  function extractProblem() {
+    const striverEntry = state.currentStriverEntry || findStriverEntryForCurrentPage();
+    return {
+      title: extractTitle(),
+      url: normalizeProblemUrl(window.location.href),
+      site: SITE,
+      difficulty: extractDifficulty(),
+      tags: extractTags(),
+      striverId: striverEntry?.id || null,
+      striverStep: striverEntry?.step || null,
+      striverTopic: striverEntry?.topic || null,
+    };
+  }
+
+  function extractTitle() {
+    const selectors = [".problem-statement .title", ".title", "div.header .title"];
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const text = element?.textContent?.trim();
+      if (text) return text;
     }
-    return;
+    return document.title.split(" - ")[0].trim() || "Unknown problem";
   }
 
-  document.getElementById(REHASH_CF_STRIVER_BANNER_ID)?.remove();
-
-  const banner = document.createElement("div");
-  banner.id = REHASH_CF_STRIVER_BANNER_ID;
-  banner.style.marginTop = "8px";
-  banner.style.padding = "8px 12px";
-  banner.style.borderRadius = "10px";
-  banner.style.background = "rgba(31, 111, 235, 0.08)";
-  banner.style.border = "1px solid rgba(31, 111, 235, 0.18)";
-  banner.style.fontSize = "13px";
-  banner.innerHTML = `
-    <strong>&#128203; Striver A2Z</strong>
-    <span style="opacity:0.82;"> - ${escapeHtml(getStepShortLabel(rehashCfState.currentStriverEntry.step))} - ${escapeHtml(rehashCfState.currentStriverEntry.topic)} - </span>
-    <span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#1f6feb;color:#fff;font-size:12px;">
-      ${escapeHtml(formatIterationBadge(rehashCfState.currentSolveCount))}
-    </span>
-  `;
-
-  titleElement.insertAdjacentElement("afterend", banner);
-}
-
-function getStepShortLabel(stepLabel) {
-  const match = String(stepLabel || "").match(/Step\s+\d+/i);
-  return match ? match[0] : stepLabel;
-}
-
-function formatIterationBadge(previousSolveCount) {
-  const nextIteration = previousSolveCount + 1;
-
-  if (nextIteration <= 1) {
-    return "Solving for 1st time";
+  function extractTags() {
+    const tags = [];
+    document.querySelectorAll(".problem-statement .tag-box, .tag-box, a[href*=\"/problemset?tags=\"]").forEach((el) => {
+      const text = el.textContent.trim();
+      if (text && !text.startsWith("*") && !tags.includes(text)) tags.push(text);
+    });
+    return tags.slice(0, 10);
   }
 
-  if (nextIteration >= 4) {
-    return "4th+ revision";
+  function extractDifficulty() {
+    for (const box of document.querySelectorAll(".tag-box")) {
+      const match = `${box.textContent || ""} ${box.getAttribute("title") || ""}`.match(/\*\s*(\d{3,4})/);
+      if (match) return match[1];
+    }
+    return "Unknown";
   }
 
-  return `${ordinalLabel(nextIteration)} revision`;
-}
+  function injectWidget() {
+    if (document.getElementById(WIDGET_HOST_ID)) return;
 
-function ordinalLabel(value) {
-  if (value === 1) return "1st";
-  if (value === 2) return "2nd";
-  if (value === 3) return "3rd";
-  return `${value}th`;
-}
+    const host = document.createElement("div");
+    host.id = WIDGET_HOST_ID;
+    host.style.position = "fixed";
+    host.style.right = "20px";
+    host.style.bottom = "20px";
+    host.style.zIndex = "9999";
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      <style>
+        .rh-widget{width:268px;background:#1e1e2e;color:#cdd6f4;border:1px solid rgba(203,166,247,.22);border-radius:8px;padding:12px;box-shadow:0 18px 36px rgba(0,0,0,.35);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:12px}
+        .rh-label{color:#cba6f7;font-weight:700;margin-bottom:6px}.rh-title{font-weight:650;margin-bottom:8px;max-height:36px;overflow:hidden}.rh-solve-info{background:#181825;border:1px solid rgba(137,180,250,.25);border-radius:8px;padding:7px 8px;margin-bottom:10px;color:#89b4fa}
+        .rh-row{display:flex;align-items:center;gap:8px}.rh-time{margin-left:auto;font-size:22px;font-weight:800;color:#89b4fa;letter-spacing:.04em}.rh-time.paused{color:#f9e2af}.rh-btn{border:0;border-radius:8px;background:#313244;color:#cdd6f4;padding:8px 10px;font-weight:700;cursor:pointer}.rh-btn:hover{background:#45475a}.rh-btn.primary{background:#89b4fa;color:#11111b}.rh-btn.done{background:#f38ba8;color:#11111b}
+      </style>
+      <div class="rh-widget">
+        <div class="rh-label">ReHash timer</div>
+        <div class="rh-title" id="rh-title">Loading problem...</div>
+        <div class="rh-solve-info" id="rh-solve-info">Solve 1 of this problem</div>
+        <div class="rh-row">
+          <button class="rh-btn primary" id="rh-start" type="button">Start</button>
+          <button class="rh-btn" id="rh-pause" type="button" disabled>Pause</button>
+          <button class="rh-btn done" id="rh-done" type="button">Done</button>
+          <div class="rh-time" id="rh-time">00:00</div>
+        </div>
+      </div>`;
+    document.documentElement.appendChild(host);
 
-function normalizeProblemUrl(url) {
-  return window.STRIVER_SHEET_UTILS?.normalizeProblemUrl
-    ? window.STRIVER_SHEET_UTILS.normalizeProblemUrl(url)
-    : normalizeProblemUrlFallback(url);
-}
-
-function normalizeProblemUrlFallback(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}/`;
-  } catch {
-    return url;
+    shadow.getElementById("rh-start").addEventListener("click", startTimer);
+    shadow.getElementById("rh-pause").addEventListener("click", togglePause);
+    shadow.getElementById("rh-done").addEventListener("click", () => stopTimerAndOpenModal());
   }
-}
 
-function storageGet(key) {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(key, (result) => resolve(result));
-  });
-}
+  function updateWidgetProblem(problem) {
+    const shadow = document.getElementById(WIDGET_HOST_ID)?.shadowRoot;
+    const title = shadow?.getElementById("rh-title");
+    if (title) title.textContent = problem.title || "Unknown problem";
+  }
 
-function storageSet(value) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set(value, () => resolve());
-  });
-}
+  async function refreshProblemInfo() {
+    const problem = extractProblem();
+    const response = await sendRuntimeMessage({ type: "GET_PROBLEM_INFO", url: problem.url, title: problem.title, site: SITE });
+    state.currentInfo = response?.ok ? response : { history: [], totalSolves: 0, nextIteration: 1 };
+    renderSolveInfo();
+  }
 
-function storageRemove(key) {
-  return new Promise((resolve) => {
-    chrome.storage.local.remove(key, () => resolve());
-  });
-}
+  function renderSolveInfo() {
+    const info = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-solve-info");
+    if (info) info.textContent = `Solve ${state.currentInfo?.nextIteration || 1} of this problem`;
+  }
+
+  function startTimer() {
+    const problem = extractProblem();
+    updateWidgetProblem(problem);
+    state.acceptedHandled = false;
+    state.elapsed = 0;
+    state.running = true;
+    state.paused = false;
+    state.startWallTime = Date.now();
+    persistTimerState();
+    startTick();
+    updateControls();
+  }
+
+  function togglePause() {
+    if (!state.running && !state.paused) return;
+    if (state.paused) {
+      state.running = true;
+      state.paused = false;
+      state.startWallTime = Date.now();
+      startTick();
+    } else {
+      recomputeElapsedFromWallTime();
+      state.running = false;
+      state.paused = true;
+      stopTick();
+    }
+    persistTimerState();
+    updateTimerUi();
+    updateControls();
+  }
+
+  function startTick() {
+    stopTick();
+    updateTimerUi();
+    state.intervalId = window.setInterval(updateTimerUi, 1000);
+  }
+
+  function stopTick() {
+    if (state.intervalId) {
+      window.clearInterval(state.intervalId);
+      state.intervalId = null;
+    }
+  }
+
+  function updateTimerUi() {
+    const display = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-time");
+    if (!display) return;
+    display.textContent = formatTimer(getDisplayElapsed());
+    display.classList.toggle("paused", state.paused);
+  }
+
+  function updateControls() {
+    const shadow = document.getElementById(WIDGET_HOST_ID)?.shadowRoot;
+    const start = shadow?.getElementById("rh-start");
+    const pause = shadow?.getElementById("rh-pause");
+    if (!start || !pause) return;
+    start.disabled = state.running || state.paused || state.elapsed > 0;
+    pause.disabled = !state.running && !state.paused;
+    pause.textContent = state.paused ? "Resume" : "Pause";
+  }
+
+  function getDisplayElapsed() {
+    if (state.running && !state.paused && Number.isFinite(state.startWallTime)) {
+      return state.elapsed + Math.floor((Date.now() - state.startWallTime) / 1000);
+    }
+    return state.elapsed;
+  }
+
+  function recomputeElapsedFromWallTime() {
+    if (state.running && !state.paused && Number.isFinite(state.startWallTime)) {
+      state.elapsed += Math.floor((Date.now() - state.startWallTime) / 1000);
+      state.startWallTime = Date.now();
+    }
+  }
+
+  function persistTimerState() {
+    recomputeElapsedFromWallTime();
+    const problem = extractProblem();
+    const record = {
+      elapsed: state.elapsed,
+      running: state.running,
+      paused: state.paused,
+      startWallTime: Date.now(),
+      problem,
+    };
+    sessionStorage.setItem(getTimerKey(problem.url), JSON.stringify(record));
+    sessionStorage.setItem(ACTIVE_KEY, JSON.stringify({ url: problem.url, title: problem.title, site: SITE }));
+  }
+
+  function restoreTimerState() {
+    const problem = extractProblem();
+    const saved = readTimerState(problem.url);
+    if (!saved) {
+      updateTimerUi();
+      updateControls();
+      return;
+    }
+    state.elapsed = Math.max(0, Number(saved.elapsed) || 0);
+    state.running = Boolean(saved.running);
+    state.paused = Boolean(saved.paused);
+    state.startWallTime = Date.now();
+    if (state.running && !state.paused && Number.isFinite(saved.startWallTime)) {
+      state.elapsed += Math.floor((Date.now() - saved.startWallTime) / 1000);
+      persistTimerState();
+      startTick();
+    } else {
+      stopTick();
+    }
+    updateTimerUi();
+    updateControls();
+  }
+
+  function readTimerState(url) {
+    try {
+      return JSON.parse(sessionStorage.getItem(getTimerKey(url)) || "null");
+    } catch {
+      return null;
+    }
+  }
+
+  function startPeriodicPersistence() {
+    if (state.persistId) window.clearInterval(state.persistId);
+    state.persistId = window.setInterval(persistTimerState, PERSIST_MS);
+  }
+
+  async function stopTimerAndOpenModal() {
+    recomputeElapsedFromWallTime();
+    state.running = false;
+    state.paused = true;
+    stopTick();
+    persistTimerState();
+    updateTimerUi();
+    updateControls();
+    await openSolvedModal(extractProblem(), state.elapsed);
+  }
+
+  function setupAcceptedObserver() {
+    if (state.observer || !document.body) return;
+    state.observer = new MutationObserver((mutations) => {
+      if (state.acceptedHandled) return;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE && nodeMatchesAcceptedVerdict(node)) {
+            state.acceptedHandled = true;
+            void stopTimerAndOpenModal();
+            triggerAutoReview();
+            return;
+          }
+        }
+      }
+    });
+    state.observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function nodeMatchesAcceptedVerdict(node) {
+    const text = node.textContent || "";
+    return Boolean(node.matches?.(".verdict-accepted")) || /\baccepted\b/i.test(text);
+  }
+
+  async function triggerAutoReview() {
+    const settings = await sendRuntimeMessage({ action: "get_settings" });
+    if (settings?.autoReviewOnAccept !== false) {
+      const problem = extractProblem();
+      window.setTimeout(() => window.ReHashReviewPanel?.trigger(SITE, problem.title, problem.url), 1500);
+    }
+  }
+
+  async function openSolvedModal(problem, elapsedSecs) {
+    if (state.modalShown || document.getElementById(MODAL_HOST_ID)) return;
+    state.modalShown = true;
+    await refreshProblemInfo();
+    const info = state.currentInfo || { history: [], nextIteration: 1 };
+    const bucketDays = await getBucketDays();
+    const host = document.createElement("div");
+    host.id = MODAL_HOST_ID;
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = modalHtml(problem, elapsedSecs, info.history || [], bucketDays);
+    document.documentElement.appendChild(host);
+
+    shadow.getElementById("rh-close").addEventListener("click", closeSolvedModal);
+    shadow.querySelectorAll("[data-bucket]").forEach((button) => {
+      button.addEventListener("click", () => {
+        shadow.querySelectorAll("[data-bucket]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+    shadow.getElementById("rh-save").addEventListener("click", async () => {
+      const active = shadow.querySelector("[data-bucket].active");
+      const markCompleted = active?.dataset.bucket === "done";
+      const nextBucketDays = markCompleted ? null : parseInt(active?.dataset.bucket || bucketDays[0], 10);
+      const response = await sendRuntimeMessage({
+        type: "SAVE_SESSION",
+        session: {
+          problemId: info.problem?.id || makeProblemId(problem),
+          problemTitle: problem.title,
+          problemUrl: problem.url,
+          url: problem.url,
+          striverId: problem.striverId,
+          iteration: info.nextIteration || 1,
+          timeSecs: elapsedSecs,
+          timeTaken: elapsedSecs,
+          approach: shadow.getElementById("rh-approach").value.trim(),
+          mistakes: shadow.getElementById("rh-mistakes").value.trim(),
+          tags: problem.tags,
+          site: SITE,
+          difficulty: problem.difficulty,
+          nextBucketDays,
+          markCompleted,
+        },
+      });
+      if (response?.ok || response?.success) {
+        sessionStorage.removeItem(getTimerKey(problem.url));
+        state.elapsed = 0;
+        state.running = false;
+        state.paused = false;
+        state.startWallTime = null;
+        updateTimerUi();
+        updateControls();
+        await refreshProblemInfo();
+        closeSolvedModal();
+      }
+    });
+  }
+
+  function modalHtml(problem, elapsedSecs, history, bucketDays) {
+    return `
+      <style>
+        .rh-overlay{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px}.rh-modal{width:min(640px,100%);max-height:88vh;overflow:auto;background:#1e1e2e;color:#cdd6f4;border:1px solid rgba(203,166,247,.25);border-radius:8px;padding:20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}.rh-heading{font-size:22px;font-weight:800;margin-bottom:4px}.rh-sub{color:#a6adc8;margin-bottom:14px}.rh-section{background:#181825;border:1px solid rgba(205,214,244,.12);border-radius:8px;padding:12px;margin-bottom:12px}.rh-history{display:grid;gap:8px}.rh-row{display:flex;justify-content:space-between;gap:12px}.rh-green{color:#a6e3a1}.rh-red{color:#f38ba8}.rh-field{width:100%;box-sizing:border-box;background:#11111b;color:#cdd6f4;border:1px solid #45475a;border-radius:8px;padding:10px;font:inherit;margin-top:6px;resize:vertical}.rh-label{display:block;margin-bottom:10px}.rh-buckets{display:flex;gap:8px;flex-wrap:wrap}.rh-chip{border:1px solid #45475a;background:#313244;color:#cdd6f4;border-radius:8px;padding:9px 12px;cursor:pointer}.rh-chip.active{border-color:#cba6f7;color:#11111b;background:#cba6f7}.rh-actions{display:flex;justify-content:flex-end;gap:10px}.rh-btn{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}.rh-save{background:#a6e3a1;color:#11111b}.rh-close{background:#313244;color:#cdd6f4}
+      </style>
+      <div class="rh-overlay"><div class="rh-modal">
+        <div class="rh-heading">Save solve session</div>
+        <div class="rh-sub">${escapeHtml(problem.title)} · ${escapeHtml(formatDuration(elapsedSecs))}</div>
+        <div class="rh-section"><strong>Previous solve history</strong><div class="rh-history">${renderHistory(history)}</div></div>
+        <div class="rh-section">
+          <label class="rh-label" for="rh-approach">What approach / technique did you use?<textarea id="rh-approach" class="rh-field" rows="3"></textarea></label>
+          <label class="rh-label" for="rh-mistakes">What tripped you up? Mistakes / gotchas<textarea id="rh-mistakes" class="rh-field" rows="3"></textarea></label>
+        </div>
+        <div class="rh-section"><strong>Next review</strong><div class="rh-buckets">${bucketDays.map((days, index) => `<button class="rh-chip ${index === 0 ? "active" : ""}" data-bucket="${days}" type="button">${days} days</button>`).join("")}<button class="rh-chip" data-bucket="done" type="button">Done ✓</button></div></div>
+        <div class="rh-actions"><button class="rh-btn rh-close" id="rh-close" type="button">Close</button><button class="rh-btn rh-save" id="rh-save" type="button">Save</button></div>
+      </div></div>`;
+  }
+
+  function renderHistory(history) {
+    if (!history.length) return '<div class="rh-row"><span>No previous solves.</span></div>';
+    return history.map((session, index) => {
+      const current = getSessionSeconds(session);
+      const previous = index > 0 ? getSessionSeconds(history[index - 1]) : null;
+      const delta = previous === null ? "" : renderDelta(previous - current);
+      return `<div class="rh-row"><span>Solve ${escapeHtml(session.iteration || index + 1)}</span><span>${escapeHtml(formatDuration(current))} ${delta}</span></div>`;
+    }).join("");
+  }
+
+  function renderDelta(deltaSecs) {
+    if (deltaSecs === 0) return "";
+    const label = formatDuration(Math.abs(deltaSecs));
+    return deltaSecs > 0 ? `<span class="rh-green">▼ ${label} faster</span>` : `<span class="rh-red">▲ ${label} slower</span>`;
+  }
+
+  function closeSolvedModal() {
+    document.getElementById(MODAL_HOST_ID)?.remove();
+    state.modalShown = false;
+  }
+
+  async function getBucketDays() {
+    const settings = await sendRuntimeMessage({ action: "get_settings" });
+    return Array.isArray(settings?.bucketDays) && settings.bucketDays.length ? settings.bucketDays : [2, 5, 10];
+  }
+
+  function findStriverEntryForCurrentPage() {
+    return window.STRIVER_SHEET_UTILS?.findByProblemUrl?.(normalizeProblemUrl(window.location.href)) || null;
+  }
+
+  function renderStriverBannerWithRetry(attempt = 0) {
+    if (!state.currentStriverEntry) return;
+    const titleElement = document.querySelector(".problem-statement .title") || document.querySelector(".title");
+    if (!titleElement) {
+      if (attempt < 12) window.setTimeout(() => renderStriverBannerWithRetry(attempt + 1), 400);
+      return;
+    }
+    document.getElementById(STRIVER_BANNER_ID)?.remove();
+    const banner = document.createElement("div");
+    banner.id = STRIVER_BANNER_ID;
+    banner.style.cssText = "margin-top:8px;padding:8px 12px;border-radius:8px;background:rgba(203,166,247,.12);border:1px solid rgba(203,166,247,.25);font-size:13px;";
+    banner.innerHTML = `<strong>Striver A2Z</strong> <span>${escapeHtml(state.currentStriverEntry.step)} - ${escapeHtml(state.currentStriverEntry.topic)}</span>`;
+    titleElement.insertAdjacentElement("afterend", banner);
+  }
+
+  function isProblemPage() {
+    return /^https:\/\/codeforces\.com\/problemset\/problem\/\d+\/[A-Za-z0-9]+/.test(location.href) || /^https:\/\/codeforces\.com\/contest\/\d+\/problem\/[A-Za-z0-9]+/.test(location.href);
+  }
+
+  function normalizeProblemUrl(url) {
+    return window.STRIVER_SHEET_UTILS?.normalizeProblemUrl ? window.STRIVER_SHEET_UTILS.normalizeProblemUrl(url) : normalizeProblemUrlFallback(url);
+  }
+
+  function normalizeProblemUrlFallback(url) {
+    try {
+      const parsed = new URL(url);
+      const path = parsed.pathname.replace(/\/+$/, "");
+      return `${parsed.origin}${path}`;
+    } catch {
+      return url;
+    }
+  }
+
+  function getTimerKey(url) {
+    return `rehash_timer_state::${SITE}::${slugFromUrl(url)}`;
+  }
+
+  function slugFromUrl(url) {
+    try {
+      return new URL(url).pathname.replace(/^\/+|\/+$/g, "").replace(/[^a-z0-9_-]+/gi, "_");
+    } catch {
+      return String(url).replace(/[^a-z0-9_-]+/gi, "_");
+    }
+  }
+
+  function makeProblemId(problem) {
+    return `${SITE}|${new URL(problem.url).pathname.replace(/\/+$/, "")}`;
+  }
+
+  function getSessionSeconds(session) {
+    if (Number.isFinite(session.timeSecs)) return session.timeSecs;
+    if (Number.isFinite(session.timeTaken)) return session.timeTaken;
+    if (Number.isFinite(session.timeTakenMs)) return Math.round(session.timeTakenMs / 1000);
+    return 0;
+  }
+
+  function formatTimer(totalSecs) {
+    const minutes = Math.floor(totalSecs / 60);
+    const seconds = totalSecs % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  function formatDuration(totalSecs) {
+    const minutes = Math.floor(totalSecs / 60);
+    const seconds = totalSecs % 60;
+    return `${minutes}m ${seconds}s`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function sendRuntimeMessage(message) {
+    return new Promise((resolve) => chrome.runtime.sendMessage(message, (response) => resolve(response)));
+  }
+})();

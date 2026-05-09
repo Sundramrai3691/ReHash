@@ -27,6 +27,19 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  const messageType = request.type || request.action;
+  if (messageType === "GET_PROBLEM_INFO") {
+    getProblemInfo(request).then(sendResponse);
+    return true;
+  }
+  if (messageType === "AI_REVIEW") {
+    runAiReview(request).then(sendResponse);
+    return true;
+  }
+  if (messageType === "SAVE_SESSION") {
+    saveSolvedSessionV2(request.session).then(sendResponse);
+    return true;
+  }
   if (request.action === "save_problem") {
     saveProblem(request.problem).then(sendResponse);
     return true;
@@ -64,10 +77,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       void scheduleAllAlarms();
       sendResponse({ success: true });
     });
-    return true;
-  }
-  if (request.action === "SAVE_SESSION") {
-    saveSolvedSession(request.session).then(sendResponse);
     return true;
   }
   if (request.action === "SYNC_GITHUB_GIST") {
@@ -136,6 +145,7 @@ function normalizeStore(rawStore) {
 
   return {
     problems,
+    striverProgress: store.striverProgress && typeof store.striverProgress === "object" ? store.striverProgress : {},
     settings: {
       ...getDefaultSettings(),
       ...sanitizeSettings(store.settings),
@@ -151,7 +161,13 @@ function getDefaultSettings() {
     githubToken: "",
     githubGistId: "",
     githubAutoSync: false,
+    autoSyncGist: false,
     githubLastSyncAt: null,
+    bucketDays: [2, 5, 10],
+    geminiKey: "",
+    groqKey: "",
+    openrouterKey: "",
+    autoReviewOnAccept: true,
   };
 }
 
@@ -162,14 +178,23 @@ function sanitizeSettings(settings) {
     : undefined;
   const reminderHour = parseInt(safeSettings.reminderHour, 10);
   const syncHour = parseInt(safeSettings.syncHour, 10);
+  const bucketDays = Array.isArray(safeSettings.bucketDays)
+    ? safeSettings.bucketDays.map((value) => parseInt(value, 10)).filter((value) => Number.isFinite(value) && value > 0)
+    : undefined;
 
   return {
     ...(intervals && intervals.length > 0 ? { intervals } : {}),
+    ...(bucketDays && bucketDays.length > 0 ? { bucketDays } : {}),
     ...(Number.isFinite(reminderHour) && reminderHour >= 0 && reminderHour <= 23 ? { reminderHour } : {}),
     ...(Number.isFinite(syncHour) && syncHour >= 0 && syncHour <= 23 ? { syncHour } : {}),
     ...(typeof safeSettings.githubToken === "string" ? { githubToken: safeSettings.githubToken.trim() } : {}),
     ...(typeof safeSettings.githubGistId === "string" ? { githubGistId: safeSettings.githubGistId.trim() } : {}),
     ...(typeof safeSettings.githubAutoSync === "boolean" ? { githubAutoSync: safeSettings.githubAutoSync } : {}),
+    ...(typeof safeSettings.autoSyncGist === "boolean" ? { autoSyncGist: safeSettings.autoSyncGist } : {}),
+    ...(typeof safeSettings.geminiKey === "string" ? { geminiKey: safeSettings.geminiKey.trim() } : {}),
+    ...(typeof safeSettings.groqKey === "string" ? { groqKey: safeSettings.groqKey.trim() } : {}),
+    ...(typeof safeSettings.openrouterKey === "string" ? { openrouterKey: safeSettings.openrouterKey.trim() } : {}),
+    ...(typeof safeSettings.autoReviewOnAccept === "boolean" ? { autoReviewOnAccept: safeSettings.autoReviewOnAccept } : {}),
     ...(typeof safeSettings.githubLastSyncAt === "string" || safeSettings.githubLastSyncAt === null
       ? { githubLastSyncAt: safeSettings.githubLastSyncAt }
       : {}),
@@ -351,6 +376,256 @@ async function saveSolvedSession(session) {
   return { success: true, sessionId: normalizedSession.id };
 }
 
+async function saveSolvedSessionV2(session) {
+  if (!session || !session.problemTitle || !(session.problemUrl || session.url)) {
+    return { ok: false, success: false, error: "invalid_session" };
+  }
+
+  const [store, sessions] = await Promise.all([getStore(), getSolvedSessions()]);
+  const settings = store.settings;
+  const problemUrl = normalizeProblemUrl(session.problemUrl || session.url);
+  const site = session.site || inferSiteFromUrl(problemUrl) || "unknown";
+  const problemId = session.problemId || generateId(site, problemUrl);
+  const now = new Date();
+  const sessionRecord = {
+    id: `sess_${Date.now()}`,
+    problemId,
+    problemUrl,
+    url: problemUrl,
+    problemTitle: session.problemTitle,
+    striverId: session.striverId || null,
+    iteration: clampPositiveInt(session.iteration, sessions.filter((item) => normalizeProblemUrl(item.problemUrl || item.url || "") === problemUrl).length + 1),
+    timeSecs: Math.max(0, Math.round(Number(session.timeSecs ?? session.timeTaken ?? 0))),
+    timeTaken: Math.max(0, Math.round(Number(session.timeSecs ?? session.timeTaken ?? 0))),
+    timeTakenMs: Math.max(0, Math.round(Number(session.timeSecs ?? session.timeTaken ?? 0) * 1000)),
+    approach: session.approach || "",
+    mistakes: session.mistakes || "",
+    tags: Array.isArray(session.tags) ? session.tags : [],
+    site,
+    difficulty: session.difficulty || "Unknown",
+    nextBucketDays: Number.isFinite(session.nextBucketDays) ? session.nextBucketDays : null,
+    markCompleted: Boolean(session.markCompleted),
+    date: now.toISOString(),
+  };
+
+  const existingProblem = normalizeProblem(store.problems[problemId] || {});
+  const bucketDays = Array.isArray(settings.bucketDays) && settings.bucketDays.length ? settings.bucketDays : [2, 5, 10];
+  const nextBucket = Math.min((existingProblem.bucket ?? existingProblem.bucketIndex ?? 0) + 1, bucketDays.length - 1);
+  const nextReviewDate = sessionRecord.markCompleted
+    ? null
+    : addDaysIso(Number.isFinite(sessionRecord.nextBucketDays) ? sessionRecord.nextBucketDays : bucketDays[nextBucket] || bucketDays[0]);
+
+  store.problems[problemId] = normalizeProblem({
+    ...existingProblem,
+    id: problemId,
+    title: sessionRecord.problemTitle,
+    url: problemUrl,
+    site,
+    difficulty: existingProblem.difficulty || sessionRecord.difficulty,
+    topics: existingProblem.topics.length ? existingProblem.topics : sessionRecord.tags,
+    addedAt: existingProblem.addedAt || Date.now(),
+    history: [...existingProblem.history, { action: "solved", date: now.getTime(), iteration: sessionRecord.iteration }],
+    iterationCount: Math.max(existingProblem.iterationCount || 0, sessionRecord.iteration),
+    totalSolves: (existingProblem.totalSolves || 0) + 1,
+    bucket: nextBucket,
+    bucketIndex: nextBucket,
+    nextReviewDate,
+    nextReviewAt: nextReviewDate ? Date.parse(nextReviewDate) : null,
+    completed: sessionRecord.markCompleted ? true : false,
+    striverId: sessionRecord.striverId || existingProblem.striverId || null,
+    solveSessionIds: addUnique(existingProblem.solveSessionIds, sessionRecord.id),
+  });
+
+  if (sessionRecord.striverId) {
+    store.striverProgress[sessionRecord.striverId] = {
+      lastSolvedAt: sessionRecord.date,
+      totalSolves: sessionRecord.iteration,
+      lastTimeSecs: sessionRecord.timeSecs,
+    };
+  }
+
+  const nextSessions = [...sessions, sessionRecord];
+  await saveStorage(store, nextSessions);
+
+  if ((settings.autoSyncGist || settings.githubAutoSync) && settings.githubToken) {
+    void syncGithubGist();
+  }
+
+  return { ok: true, success: true, session: sessionRecord };
+}
+
+async function getProblemInfo({ url, title, site }) {
+  const [store, sessions] = await Promise.all([getStore(), getSolvedSessions()]);
+  const normalizedUrl = normalizeProblemUrl(url || "");
+  const problem = Object.values(store.problems).map(normalizeProblem).find((item) =>
+    item.url === normalizedUrl || (item.title === title && item.site === site),
+  ) || null;
+  const problemId = problem?.id || generateId(site || inferSiteFromUrl(normalizedUrl) || "unknown", normalizedUrl);
+  const history = sessions
+    .filter((session) => session.problemId === problemId || normalizeProblemUrl(session.problemUrl || session.url || "") === normalizedUrl)
+    .sort((first, second) => (first.iteration || 0) - (second.iteration || 0));
+  const totalSolves = problem?.totalSolves || history.length;
+  return {
+    ok: true,
+    problem,
+    history,
+    totalSolves,
+    nextIteration: totalSolves + 1,
+  };
+}
+
+async function runAiReview(request) {
+  const settings = await getSettings();
+  const prompt = buildReviewPrompt(request);
+  const providers = [
+    {
+      name: "Gemini 2.0 Flash",
+      key: settings.geminiKey,
+      call: () => callGemini(settings.geminiKey, prompt),
+    },
+    {
+      name: "Groq Llama 3.3 70B",
+      key: settings.groqKey,
+      call: () => callGroq(settings.groqKey, prompt),
+    },
+    {
+      name: "OpenRouter DeepSeek R1",
+      key: settings.openrouterKey,
+      call: () => callOpenRouter(settings.openrouterKey, prompt),
+    },
+  ];
+  const log = [];
+
+  if (!providers.some((provider) => provider.key)) {
+    return { ok: false, error: "no_keys", message: "Add at least one AI reviewer API key in settings.", log };
+  }
+
+  for (const provider of providers) {
+    if (!provider.key) {
+      log.push({ provider: provider.name, ok: false, error: "missing_key" });
+      continue;
+    }
+
+    try {
+      const text = await provider.call();
+      const review = parseReviewJson(text);
+      log.push({ provider: provider.name, ok: true });
+      return { ok: true, review, log };
+    } catch (error) {
+      log.push({ provider: provider.name, ok: false, error: error.message || "failed" });
+    }
+  }
+
+  return { ok: false, error: "all_failed", message: "All configured AI reviewers failed.", log };
+}
+
+function buildReviewPrompt({ problemTitle, problemUrl, language, code }) {
+  return `You are a senior software engineer conducting a technical interview code review. Analyze this solution to "${problemTitle}" with the mindset of a Google/Meta/Amazon interviewer.
+
+Problem: ${problemTitle}
+URL: ${problemUrl}
+Language: ${language}
+
+Submitted code:
+\`\`\`${language}
+${code}
+\`\`\`
+
+Respond ONLY with a valid JSON object - no markdown fences, no extra text:
+{
+  "verdict": "strong_hire" | "hire" | "borderline" | "no_hire",
+  "score": <1-10>,
+  "summary": "<2-3 sentence assessment>",
+  "complexity": { "time": "O(...)", "space": "O(...)", "isOptimal": bool, "optimalNote": "..." },
+  "issues": [{ "severity": "critical"|"major"|"minor"|"style", "title": "...", "description": "...", "fix": "..." }],
+  "namingIssues": [{ "original": "...", "suggested": "...", "reason": "..." }],
+  "positives": ["..."],
+  "improvedCode": "<full improved code if score < 8, else empty string>",
+  "interviewTips": "..."
+}`;
+}
+
+async function callGemini(key, prompt) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+    }),
+  });
+  if (!response.ok) throw new Error(`http_${response.status}`);
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+}
+
+async function callGroq(key, prompt) {
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: "Return only valid JSON for technical interview code review." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 4096,
+    }),
+  });
+  if (!response.ok) throw new Error(`http_${response.status}`);
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+async function callOpenRouter(key, prompt) {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "HTTP-Referer": "https://github.com/rehash-extension",
+      "X-Title": "ReHash DSA Reviewer",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "deepseek/deepseek-r1:free",
+      messages: [
+        { role: "system", content: "Return only valid JSON for technical interview code review." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 4096,
+    }),
+  });
+  if (!response.ok) throw new Error(`http_${response.status}`);
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+function parseReviewJson(text) {
+  const cleaned = String(text || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("invalid_json");
+  }
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+async function saveStorage(store, sessions) {
+  await chrome.storage.local.set({
+    revise_mate_data: normalizeStore(store),
+    solvedSessions: Array.isArray(sessions) ? sessions : await getSolvedSessions(),
+  });
+}
+
 async function getSolvedSessions() {
   const data = await chrome.storage.local.get("solvedSessions");
   return Array.isArray(data.solvedSessions)
@@ -377,12 +652,16 @@ function normalizeSolvedSession(session, existingSessions = []) {
 
   return {
     id,
+    problemId: session.problemId || generateId(site, problemUrl),
     problemUrl,
+    url: problemUrl,
     problemTitle: session.problemTitle,
     striverId: session.striverId || null,
     striverStep: session.striverStep || null,
     striverTopic: session.striverTopic || null,
     iteration,
+    timeSecs: Number.isFinite(session.timeSecs) ? Math.max(0, Math.round(session.timeSecs)) : Math.round(timeTakenMs / 1000),
+    timeTaken: Number.isFinite(session.timeTaken) ? Math.max(0, Math.round(session.timeTaken)) : Math.round(timeTakenMs / 1000),
     timeTakenMs,
     approach: session.approach || "",
     mistakes: session.mistakes || "",
@@ -395,6 +674,8 @@ function normalizeSolvedSession(session, existingSessions = []) {
     tags: Array.isArray(session.tags) ? session.tags : [],
     notionOpened: Boolean(session.notionOpened),
     difficulty: session.difficulty || "Unknown",
+    nextBucketDays: Number.isFinite(session.nextBucketDays) ? session.nextBucketDays : null,
+    markCompleted: Boolean(session.markCompleted),
   };
 }
 
@@ -415,6 +696,8 @@ function normalizeProblem(problem) {
     history: Array.isArray(rawProblem.history) ? rawProblem.history : [],
     completed: Boolean(rawProblem.completed),
     iterationCount: clampPositiveInt(rawProblem.iterationCount, 0),
+    totalSolves: clampPositiveInt(rawProblem.totalSolves, rawProblem.iterationCount || 0),
+    bucket: clampPositiveInt(rawProblem.bucket, rawProblem.bucketIndex || 0),
     nextReviewDate: normalizeIsoDate(rawProblem.nextReviewDate),
     striverId: rawProblem.striverId || null,
     striverStep: rawProblem.striverStep || null,
@@ -683,6 +966,13 @@ function normalizeIsoDate(value) {
   } catch {
     return null;
   }
+}
+
+function addDaysIso(daysAhead) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + daysAhead);
+  return date.toISOString().slice(0, 10);
 }
 
 function clampPositiveInt(value, fallback) {

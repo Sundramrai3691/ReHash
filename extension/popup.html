@@ -225,6 +225,45 @@
               <span>Auto-sync after every solve session</span>
             </label>
             <p class="settings-meta" id="lastSyncStatus">Last sync: never</p>
+          </div>
+
+          <div class="settings-section">
+            <h3>AI code reviewer - free tier API keys</h3>
+            <p class="settings-meta">Add at least one. ReHash tries Gemini → Groq → OpenRouter. All are free to sign up.</p>
+            <label for="gemini-key">
+              Gemini 2.0 Flash key
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Get key</a>
+            </label>
+            <input
+              type="password"
+              id="gemini-key"
+              class="input"
+              placeholder="AIza..."
+            />
+            <label for="groq-key">
+              Groq key (Llama 3.3 70B)
+              <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer">Get key</a>
+            </label>
+            <input
+              type="password"
+              id="groq-key"
+              class="input"
+              placeholder="gsk_..."
+            />
+            <label for="openrouter-key">
+              OpenRouter key (DeepSeek R1)
+              <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">Get key</a>
+            </label>
+            <input
+              type="password"
+              id="openrouter-key"
+              class="input"
+              placeholder="sk-or-..."
+            />
+            <label class="checkbox-row">
+              <input type="checkbox" id="auto-review-on-accept" />
+              <span>Auto-review on accepted submission</span>
+            </label>
             <div class="settings-actions">
               <button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
               <button class="btn btn-secondary" id="syncNowBtn">Sync Now</button>

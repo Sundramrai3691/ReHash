@@ -420,6 +420,10 @@ function renderSettings() {
   document.getElementById("githubTokenInput").value = currentSettings.githubToken || "";
   document.getElementById("githubGistIdInput").value = currentSettings.githubGistId || "";
   document.getElementById("githubAutoSyncInput").checked = Boolean(currentSettings.githubAutoSync);
+  document.getElementById("gemini-key").value = currentSettings.geminiKey || "";
+  document.getElementById("groq-key").value = currentSettings.groqKey || "";
+  document.getElementById("openrouter-key").value = currentSettings.openrouterKey || "";
+  document.getElementById("auto-review-on-accept").checked = currentSettings.autoReviewOnAccept !== false;
   document.getElementById("lastSyncStatus").textContent = currentSettings.githubLastSyncAt
     ? `Last sync: ${new Date(currentSettings.githubLastSyncAt).toLocaleString()}`
     : "Last sync: never";
@@ -680,6 +684,11 @@ async function saveSettings() {
         githubToken: document.getElementById("githubTokenInput").value.trim(),
         githubGistId: document.getElementById("githubGistIdInput").value.trim(),
         githubAutoSync: document.getElementById("githubAutoSyncInput").checked,
+        autoSyncGist: document.getElementById("githubAutoSyncInput").checked,
+        geminiKey: document.getElementById("gemini-key").value.trim(),
+        groqKey: document.getElementById("groq-key").value.trim(),
+        openrouterKey: document.getElementById("openrouter-key").value.trim(),
+        autoReviewOnAccept: document.getElementById("auto-review-on-accept").checked,
       },
     }),
     chrome.storage.local.set({ notionUrl }),
