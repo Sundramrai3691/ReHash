@@ -806,13 +806,25 @@ async function sendDailyNotification() {
 
 function createNotificationSafe(options) {
   return new Promise((resolve) => {
-    try {
-      chrome.notifications.create(options, () => {
-        void chrome.runtime.lastError;
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
         resolve();
+      }
+    };
+
+    try {
+      const maybePromise = chrome.notifications.create(`rehash-${Date.now()}`, options, () => {
+        void chrome.runtime.lastError;
+        finish();
       });
+
+      if (maybePromise && typeof maybePromise.catch === "function") {
+        maybePromise.then(finish).catch(finish);
+      }
     } catch {
-      resolve();
+      finish();
     }
   });
 }
