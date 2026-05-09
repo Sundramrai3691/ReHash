@@ -198,6 +198,7 @@
     if (!handle) return;
     handle.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
+      if (handle.id !== "rh-fab" && event.target.closest?.("button")) return;
       const rect = host.getBoundingClientRect();
       const drag = {
         offsetX: event.clientX - rect.left,
