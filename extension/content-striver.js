@@ -83,9 +83,9 @@
 
   function stateLabel(problem) {
     if (!problem) return "+ track";
-    if (isDue(problem)) return "!";
+    if (isDue(problem)) return "● due";
     const solves = problem.totalSolves || problem.iterationCount || 0;
-    return solves > 0 ? `Nx ${solves}` : "queued";
+    return solves > 0 ? `⟳ ${solves}x` : "◎ queued";
   }
 
   function showPopover(button, problem, fallbackTitle, fallbackUrl) {
@@ -100,9 +100,23 @@
     document.body.appendChild(popover);
     popover.querySelector(".rehash-pop-close").addEventListener("click", closePopover);
     popover.querySelector("[data-open]")?.addEventListener("click", () => window.open(problem?.url || fallbackUrl, "_blank", "noopener"));
+    popover.querySelector("[data-track]")?.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ action: "save_problem", problem: { title: fallbackTitle, url: fallbackUrl, site: inferSite(fallbackUrl), tags: [], difficulty: "Unknown" } }, () => {
+        closePopover();
+        document.querySelectorAll("[data-rehash-injected='1']").forEach((row) => {
+          row.dataset.rehashInjected = "0";
+          row.querySelector(".rehash-striver-wrap")?.remove();
+        });
+        scanAndInject();
+      });
+    });
     popover.querySelector("[data-revised]")?.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "MARK_REVISED", problemId: problem.id }, () => {
         closePopover();
+        document.querySelectorAll("[data-rehash-injected='1']").forEach((row) => {
+          row.dataset.rehashInjected = "0";
+          row.querySelector(".rehash-striver-wrap")?.remove();
+        });
         scanAndInject();
       });
     });
@@ -118,7 +132,7 @@
       <div class="rehash-badges"><span class="${difficultyClass(problem?.difficulty)}">${escapeHtml(problem?.difficulty || "Unknown")}</span><span>Bucket ${escapeHtml(String(problem?.bucketIndex ?? 0))}</span>${problem && isDue(problem) ? "<span class=\"rehash-due-text\">DUE TODAY</span>" : ""}</div>
       <div class="rehash-pop-grid"><span>Total Solves</span><b>${escapeHtml(String(problem?.totalSolves || sessions.length || 0))}</b><span>Average Time</span><b>${escapeHtml(avg)}</b><span>Next Review</span><b>${escapeHtml(problem?.nextReviewDate || "-")}</b><span>Striver</span><b>${escapeHtml(problem?.striverTopic || "-")}</b><span>Topics</span><b>${escapeHtml((problem?.topics || []).join(", ") || "-")}</b></div>
       <div class="rehash-history">${sessions.slice(0, 3).map(renderSession).join("") || "<p>No solve history.</p>"}${sessions.length > 3 ? `<p>+${sessions.length - 3} more</p>` : ""}</div>
-      <div class="rehash-pop-actions"><button data-open type="button">Open</button>${problem ? "<button data-revised type=\"button\">Mark Revised</button>" : ""}<button data-popup type="button">ReHash</button></div>
+      <div class="rehash-pop-actions"><button data-open type="button">Open</button>${problem ? "<button data-revised type=\"button\">Mark Revised</button>" : "<button data-track type=\"button\">Track</button>"}<button data-popup type="button">ReHash</button></div>
       <a class="rehash-hidden-link" href="${escapeAttribute(url)}" target="_blank" rel="noreferrer"></a>
     `;
   }
@@ -150,6 +164,7 @@
   function formatDate(value) { return value ? new Date(value).toLocaleDateString() : "-"; }
   function truncate(value, max) { return String(value).length > max ? `${String(value).slice(0, max - 1)}...` : String(value); }
   function difficultyClass(value) { return String(value || "").toLowerCase().includes("hard") ? "hard" : String(value || "").toLowerCase().includes("medium") ? "medium" : "easy"; }
+  function inferSite(url) { return /codeforces\.com/.test(url) ? "codeforces" : "leetcode"; }
   function escapeHtml(value) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
   function escapeAttribute(value) { return escapeHtml(value); }
 })();

@@ -135,6 +135,77 @@ main {
   background: #fafafa;
 }
 
+.today-group {
+  border: 1px solid #e6edf5;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.today-group summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-weight: 700;
+  color: #24364b;
+  background: #f6f8fb;
+}
+
+.today-group-list {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.today-card {
+  background: #fff;
+  border-radius: 8px;
+}
+
+.today-card-top {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.topic-line {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.pattern-badge {
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.last-mistake {
+  font-size: 12px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+.mistake-chip {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 7px;
+  margin: 3px 2px;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.mistake-elab {
+  color: #6b7280;
+  margin-top: 4px;
+}
+
 .problem-header,
 .queue-header {
   display: flex;

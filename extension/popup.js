@@ -44,6 +44,9 @@ function initializeActions() {
     void saveManualProblem();
   });
   document.getElementById("exportBtn").addEventListener("click", exportCSV);
+  document.getElementById("analyticsBtn").addEventListener("click", () => {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("analytics.html") });
+  });
   document.getElementById("settingsBtn").addEventListener("click", () => openTab("settings"));
   document.getElementById("saveNotesBtn").addEventListener("click", () => {
     void saveNotes();
@@ -101,11 +104,62 @@ function renderTodayList() {
   }
 
   todayEmpty.style.display = "none";
-  todayList.innerHTML = todayProblems
-    .sort((first, second) => getProblemDueTimestamp(first) - getProblemDueTimestamp(second))
-    .map((problem) => renderProblemCard(problem))
-    .join("");
+  todayList.innerHTML = renderTodayGroups(todayProblems);
   attachProblemEventListeners(todayList);
+  attachGroupToggles(todayList);
+}
+
+function renderTodayGroups(todayProblems) {
+  const grouped = todayProblems.reduce((groups, problem) => {
+    const topic = (problem.topics || [])[0] || "Uncategorized";
+    if (!groups[topic]) groups[topic] = [];
+    groups[topic].push(problem);
+    return groups;
+  }, {});
+  return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([topic, problems]) => `
+    <details class="today-group" open>
+      <summary>${escapeHtml(topic)} <span>(${problems.length} due)</span></summary>
+      <div class="today-group-list">
+        ${problems.sort(compareTodayProblems).map((problem) => renderTodayCard(problem)).join("")}
+      </div>
+    </details>
+  `).join("");
+}
+
+function renderTodayCard(problem) {
+  const difficultyClass = getDifficultyClass(problem.difficulty);
+  const last = getLatestSessionForProblem(problem);
+  const mistakeTags = Array.isArray(last?.mistakeTags) ? last.mistakeTags : [];
+  const elaboration = mistakeTags.map((tag) => tag.elaboration).find(Boolean) || "";
+  const avgSecs = getAverageSolveSecs(problem);
+  return `
+    <div class="problem-card today-card" data-id="${escapeAttribute(problem.id)}">
+      <div class="today-card-top">
+        <span class="difficulty ${difficultyClass}">${escapeHtml(problem.difficulty || "Unknown")}</span>
+        <a href="${escapeAttribute(problem.url)}" target="_blank" class="problem-title">${escapeHtml(problem.title)}</a>
+        <span class="problem-site">${escapeHtml(problem.site)}</span>
+      </div>
+      <div class="topic-line">${escapeHtml((problem.topics || []).slice(0, 4).join(" · ") || "No topics")}</div>
+      <div class="problem-meta">
+        <span class="bucket">Bucket ${escapeHtml(String(problem.bucketIndex ?? 0))}</span>
+        <span class="problem-pill">Iter ${escapeHtml(String(problem.iterationCount || 0))}</span>
+        <span class="review-date">Due: ${escapeHtml(formatDueLabel(problem))}</span>
+        <span class="problem-pill">~${escapeHtml(formatSecs(avgSecs))} avg</span>
+        ${problem.detectedPattern ? `<span class="pattern-badge">◇ ${escapeHtml(problem.detectedPattern)}</span>` : ""}
+      </div>
+      <div class="last-mistake">
+        <strong>Last mistake:</strong>
+        ${mistakeTags.length ? mistakeTags.map((tag) => `<span class="mistake-chip">${escapeHtml(tag.label)}</span>`).join("") : '<span class="problem-subtle">None logged</span>'}
+        ${elaboration ? `<div class="mistake-elab">"${escapeHtml(truncate(elaboration, 80))}"</div>` : ""}
+      </div>
+      <div class="problem-actions">
+        <button class="btn-sm btn-open-problem" data-url="${escapeAttribute(problem.url)}">Open</button>
+        <button class="btn-sm btn-revised" data-id="${escapeAttribute(problem.id)}">Mark Revised</button>
+        <button class="btn-sm btn-move" data-id="${escapeAttribute(problem.id)}">Move</button>
+        <button class="btn-sm btn-notes" data-id="${escapeAttribute(problem.id)}">Notes</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderQueueList() {
@@ -177,6 +231,7 @@ function renderProblemCard(problem) {
         <span class="bucket">Bucket ${escapeHtml(String(problem.bucketIndex ?? 0))}</span>
         <span class="review-date">${escapeHtml(reviewLabel)}</span>
         <span class="problem-pill">Iter ${escapeHtml(String(problem.iterationCount || 0))}</span>
+        ${problem.detectedPattern ? `<span class="pattern-badge">◇ ${escapeHtml(problem.detectedPattern)}</span>` : ""}
       </div>
       ${stepLabel ? `<div class="problem-subtle">${escapeHtml(stepLabel)}</div>` : ""}
       <div class="problem-topics">${escapeHtml(topics || "None")}</div>
@@ -214,6 +269,7 @@ function renderQueueCard(problem) {
         <span class="queue-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
         <span class="difficulty ${difficultyClass}">${escapeHtml(problem.difficulty || "Unknown")}</span>
         <span class="queue-iteration">Iteration ${escapeHtml(String(Math.max(1, problem.iterationCount || 1)))}</span>
+        ${problem.detectedPattern ? `<span class="pattern-badge">◇ ${escapeHtml(problem.detectedPattern)}</span>` : ""}
       </div>
       <div class="queue-actions">
         <button class="btn-sm btn-open btn-open-problem" data-url="${escapeAttribute(problem.url)}">Solve Now</button>
@@ -451,7 +507,15 @@ function attachProblemEventListeners(container) {
       void deleteProblem(button.dataset.id);
     });
   });
+
+  container.querySelectorAll(".btn-open-problem").forEach((button) => {
+    button.addEventListener("click", () => {
+      void chrome.tabs.create({ url: button.dataset.url });
+    });
+  });
 }
+
+function attachGroupToggles() {}
 
 function getDueProblems() {
   const todayEnd = getEndOfDay();
@@ -491,6 +555,44 @@ function getSortedQueueProblems() {
   });
 }
 
+function compareTodayProblems(first, second) {
+  const diff = difficultyRank(second.difficulty) - difficultyRank(first.difficulty);
+  if (diff !== 0) return diff;
+  return getOverdueDays(getProblemDueTimestamp(second)) - getOverdueDays(getProblemDueTimestamp(first));
+}
+
+function getLatestSessionForProblem(problem) {
+  const url = normalizeProblemUrl(problem.url);
+  return currentSolvedSessions
+    .filter((session) => session.problemId === problem.id || normalizeProblemUrl(session.problemUrl || session.url || "") === url)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
+}
+
+function getAverageSolveSecs(problem) {
+  const url = normalizeProblemUrl(problem.url);
+  const matches = currentSolvedSessions.filter((session) => session.problemId === problem.id || normalizeProblemUrl(session.problemUrl || session.url || "") === url);
+  if (!matches.length) return 0;
+  return Math.round(matches.reduce((sum, session) => sum + Math.round(getSessionTimeMs(session) / 1000), 0) / matches.length);
+}
+
+function formatDueLabel(problem) {
+  const overdue = getOverdueDays(getProblemDueTimestamp(problem));
+  if (overdue > 0) return `${overdue}d overdue`;
+  return "today";
+}
+
+function formatSecs(secs) {
+  return `${Math.floor(secs / 60)}m`;
+}
+
+function difficultyRank(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized.includes("hard")) return 3;
+  if (normalized.includes("medium")) return 2;
+  if (normalized.includes("easy")) return 1;
+  return Number(normalized) || 0;
+}
+
 function getFilteredProblems() {
   return Object.values(currentProblems).filter((problem) => {
     const topicMatches = activeTagFilter === "All" ||
@@ -516,13 +618,13 @@ function updateProgress() {
   const solvedDueCount = dueProblems.filter((problem) => solvedTodayUrls.has(normalizeProblemUrl(problem.url))).length;
 
   if (dueProblems.length === 0) {
-    document.getElementById("progressText").textContent = "0% complete (0/0)";
+    document.getElementById("progressText").textContent = "0 / 0 revised today   0%";
     document.getElementById("progressFill").style.width = "0%";
     return;
   }
 
   const percent = Math.round((solvedDueCount / dueProblems.length) * 100);
-  document.getElementById("progressText").textContent = `${percent}% complete (${solvedDueCount}/${dueProblems.length})`;
+  document.getElementById("progressText").textContent = `${solvedDueCount} / ${dueProblems.length} revised today   ${percent}%`;
   document.getElementById("progressFill").style.width = `${percent}%`;
 }
 

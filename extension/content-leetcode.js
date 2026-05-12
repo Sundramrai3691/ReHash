@@ -38,6 +38,10 @@
     updateWidgetProblem(extractProblem());
     await refreshProblemInfo();
     renderStriverBannerWithRetry();
+    if (state.timerController) {
+      setupAcceptedObserver();
+      return;
+    }
     restoreTimerState();
     setupAcceptedObserver();
     window.addEventListener("beforeunload", persistTimerState);
@@ -547,6 +551,7 @@
         state.running = false;
         state.paused = false;
         state.startWallTime = null;
+        state.timerController?.reset?.();
         updateTimerUi();
         updateControls();
         await refreshProblemInfo();
