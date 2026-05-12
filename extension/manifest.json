@@ -20,7 +20,8 @@
     "https://api.github.com/*",
     "https://generativelanguage.googleapis.com/*",
     "https://api.groq.com/*",
-    "https://openrouter.ai/*"
+    "https://openrouter.ai/*",
+    "https://takeuforward.org/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -35,13 +36,24 @@
   "content_scripts": [
     {
       "matches": ["https://leetcode.com/problems/*"],
-      "js": ["striver-sheet.js", "content-leetcode.js", "review-panel.js"],
+      "js": ["striver-sheet.js", "mistake-tags.js", "timer-widget.js", "content-leetcode.js", "review-panel.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://codeforces.com/problemset/problem/*/*", "https://codeforces.com/contest/*/problem/*"],
-      "js": ["striver-sheet.js", "content-codeforces.js", "review-panel.js"],
+      "js": ["striver-sheet.js", "mistake-tags.js", "timer-widget.js", "content-codeforces.js", "review-panel.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://takeuforward.org/dsa/strivers-a2z-sheet*"],
+      "js": ["striver-sheet.js", "content-striver.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["analytics.html", "analytics.js", "analytics.css"],
+      "matches": ["<all_urls>"]
     }
   ]
 }

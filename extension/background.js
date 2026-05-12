@@ -40,6 +40,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     saveSolvedSessionV2(request.session).then(sendResponse);
     return true;
   }
+  if (messageType === "DETECT_PATTERN") {
+    detectPattern(request.session).then(sendResponse);
+    return true;
+  }
+  if (messageType === "MARK_REVISED") {
+    markRevisedWithBucketDays(request.problemId).then(sendResponse);
+    return true;
+  }
   if (request.action === "save_problem") {
     saveProblem(request.problem).then(sendResponse);
     return true;
@@ -146,6 +154,7 @@ function normalizeStore(rawStore) {
   return {
     problems,
     striverProgress: store.striverProgress && typeof store.striverProgress === "object" ? store.striverProgress : {},
+    customMistakeTags: Array.isArray(store.customMistakeTags) ? store.customMistakeTags : [],
     settings: {
       ...getDefaultSettings(),
       ...sanitizeSettings(store.settings),
@@ -275,6 +284,34 @@ async function markRevised(problemId) {
   return { success: true };
 }
 
+async function markRevisedWithBucketDays(problemId) {
+  const store = await getStore();
+  const problems = store.problems || {};
+  if (!problems[problemId]) {
+    return { ok: false, success: false };
+  }
+
+  const problem = normalizeProblem(problems[problemId]);
+  const bucketDays = store.settings?.bucketDays || [2, 5, 10];
+  const nextBi = (problem.bucketIndex || 0) + 1;
+  if (nextBi < bucketDays.length) {
+    problem.bucketIndex = nextBi;
+    problem.bucket = nextBi;
+    problem.nextReviewAt = Date.now() + bucketDays[nextBi] * 86400000;
+    problem.nextReviewDate = new Date(problem.nextReviewAt).toISOString().slice(0, 10);
+    problem.completed = false;
+  } else {
+    problem.completed = true;
+    problem.nextReviewAt = null;
+    problem.nextReviewDate = null;
+  }
+  problem.history = problem.history || [];
+  problem.history.push({ date: Date.now(), action: "revised" });
+  store.problems[problemId] = normalizeProblem(problem);
+  await chrome.storage.local.set({ revise_mate_data: store });
+  return { ok: true, success: true };
+}
+
 async function moveBucket(problemId, bucketIndex) {
   const store = await getStore();
   const problem = normalizeProblem(store.problems[problemId]);
@@ -399,7 +436,10 @@ async function saveSolvedSessionV2(session) {
     timeTaken: Math.max(0, Math.round(Number(session.timeSecs ?? session.timeTaken ?? 0))),
     timeTakenMs: Math.max(0, Math.round(Number(session.timeSecs ?? session.timeTaken ?? 0) * 1000)),
     approach: session.approach || "",
-    mistakes: session.mistakes || "",
+    mistakeTags: normalizeMistakeTags(session.mistakeTags),
+    mistakes: Array.isArray(session.mistakeTags) && session.mistakeTags.length
+      ? normalizeMistakeTags(session.mistakeTags).map((tag) => tag.label).join(", ")
+      : session.mistakes || "",
     tags: Array.isArray(session.tags) ? session.tags : [],
     site,
     difficulty: session.difficulty || "Unknown",
@@ -517,6 +557,68 @@ async function runAiReview(request) {
   }
 
   return { ok: false, error: "all_failed", message: "All configured AI reviewers failed.", log };
+}
+
+async function detectPattern(session) {
+  if (!session || !session.problemId) {
+    return { ok: false, skipped: true };
+  }
+
+  const settings = await getSettings();
+  if (!settings.geminiKey && !settings.groqKey && !settings.openrouterKey) {
+    return { ok: true, skipped: true };
+  }
+
+  const prompt = buildPatternPrompt(session);
+  const providers = [
+    { key: settings.geminiKey, call: () => callGemini(settings.geminiKey, prompt) },
+    { key: settings.groqKey, call: () => callGroq(settings.groqKey, prompt) },
+    { key: settings.openrouterKey, call: () => callOpenRouter(settings.openrouterKey, prompt) },
+  ];
+
+  for (const provider of providers) {
+    if (!provider.key) continue;
+    try {
+      const parsed = parseReviewJson(await provider.call());
+      const store = await getStore();
+      const problem = normalizeProblem(store.problems[session.problemId]);
+      if (!problem.id) return { ok: false, error: "problem_not_found" };
+      store.problems[session.problemId] = normalizeProblem({
+        ...problem,
+        detectedPattern: sanitizePattern(parsed.pattern),
+        patternKeyInsight: String(parsed.keyInsight || "").slice(0, 240),
+        patternReviewSuggestion: String(parsed.reviewSuggestion || "").slice(0, 240),
+        patternDetectedAt: Date.now(),
+      });
+      await chrome.storage.local.set({ revise_mate_data: store });
+      return { ok: true, pattern: store.problems[session.problemId].detectedPattern };
+    } catch {}
+  }
+
+  return { ok: false, error: "all_failed" };
+}
+
+function buildPatternPrompt(session) {
+  const mistakeLabels = normalizeMistakeTags(session.mistakeTags).map((tag) => tag.label).join(", ") || "none";
+  return `You are a DSA pattern classifier. Given a problem, identify its core algorithmic pattern.
+
+Problem: ${session.problemTitle || "Unknown"}
+Difficulty: ${session.difficulty || "Unknown"}
+Topics: ${(Array.isArray(session.tags) ? session.tags : []).join(", ")}
+User's approach: ${session.approach || "not provided"}
+User's mistakes: ${mistakeLabels}
+
+Respond ONLY with a JSON object, no markdown, no explanation:
+{
+  "pattern": "<one of: Two Pointers, Sliding Window, Binary Search, Binary Search on Answer, Prefix Sum, Hash Map, Monotonic Stack, BFS, DFS, Topological Sort, Union Find, Trie, Backtracking, 1D DP, 2D DP, DP on Strings, DP on Trees, Greedy, Divide and Conquer, Segment Tree, Bit Manipulation, Math, Simulation, Two Heaps, Interval Merge, Cyclic Sort, Fast and Slow Pointers, Other>",
+  "keyInsight": "<one sentence: the core observation that unlocks this problem>",
+  "reviewSuggestion": "<one sentence: given the mistakes made, what concept should the user review>"
+}`;
+}
+
+function sanitizePattern(value) {
+  const allowed = new Set(["Two Pointers", "Sliding Window", "Binary Search", "Binary Search on Answer", "Prefix Sum", "Hash Map", "Monotonic Stack", "BFS", "DFS", "Topological Sort", "Union Find", "Trie", "Backtracking", "1D DP", "2D DP", "DP on Strings", "DP on Trees", "Greedy", "Divide and Conquer", "Segment Tree", "Bit Manipulation", "Math", "Simulation", "Two Heaps", "Interval Merge", "Cyclic Sort", "Fast and Slow Pointers", "Other"]);
+  return allowed.has(value) ? value : "Other";
 }
 
 function buildReviewPrompt({ problemTitle, problemUrl, language, code }) {
@@ -676,6 +778,7 @@ function normalizeSolvedSession(session, existingSessions = []) {
     difficulty: session.difficulty || "Unknown",
     nextBucketDays: Number.isFinite(session.nextBucketDays) ? session.nextBucketDays : null,
     markCompleted: Boolean(session.markCompleted),
+    mistakeTags: normalizeMistakeTags(session.mistakeTags),
   };
 }
 
@@ -703,6 +806,10 @@ function normalizeProblem(problem) {
     striverStep: rawProblem.striverStep || null,
     striverTopic: rawProblem.striverTopic || null,
     solveSessionIds: Array.isArray(rawProblem.solveSessionIds) ? rawProblem.solveSessionIds : [],
+    detectedPattern: rawProblem.detectedPattern || null,
+    patternKeyInsight: rawProblem.patternKeyInsight || "",
+    patternReviewSuggestion: rawProblem.patternReviewSuggestion || "",
+    patternDetectedAt: Number.isFinite(rawProblem.patternDetectedAt) ? rawProblem.patternDetectedAt : null,
   };
 }
 
@@ -1010,6 +1117,19 @@ function addUnique(items, nextItem) {
     values.push(nextItem);
   }
   return values;
+}
+
+function normalizeMistakeTags(tags) {
+  return Array.isArray(tags)
+    ? tags
+      .filter((tag) => tag && typeof tag === "object" && tag.id && tag.label)
+      .map((tag) => ({
+        id: String(tag.id).slice(0, 80),
+        label: String(tag.label).slice(0, 120),
+        category: String(tag.category || "Custom").slice(0, 80),
+        elaboration: String(tag.elaboration || "").slice(0, 200),
+      }))
+    : [];
 }
 
 function formatDurationMs(totalMs) {

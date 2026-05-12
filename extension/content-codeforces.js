@@ -20,6 +20,7 @@
     persistId: null,
     running: false,
     startWallTime: null,
+    timerController: null,
   };
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -93,6 +94,19 @@
   }
 
   function injectWidget() {
+    if (window.ReHashTimerWidget) {
+      const problem = extractProblem();
+      state.timerController = window.ReHashTimerWidget.createTimerWidget(
+        slugFromUrl(problem.url),
+        SITE,
+        problem.title,
+        state.currentInfo?.totalSolves || 0,
+        (elapsedSecs) => {
+          void openSolvedModal(extractProblem(), elapsedSecs);
+        },
+      );
+      return;
+    }
     if (document.getElementById(WIDGET_HOST_ID)) return;
 
     const host = document.createElement("div");
@@ -142,6 +156,10 @@
   }
 
   function updateWidgetProblem(problem) {
+    if (state.timerController) {
+      state.timerController.updateProblem(problem.title, state.currentInfo?.totalSolves || 0);
+      return;
+    }
     const shadow = document.getElementById(WIDGET_HOST_ID)?.shadowRoot;
     const title = shadow?.getElementById("rh-title");
     if (title) title.textContent = problem.title || "Unknown problem";
@@ -155,6 +173,10 @@
   }
 
   function renderSolveInfo() {
+    if (state.timerController) {
+      state.timerController.updateProblem(extractProblem().title, state.currentInfo?.totalSolves || 0);
+      return;
+    }
     const info = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-solve-info");
     if (info) info.textContent = `Solve ${state.currentInfo?.nextIteration || 1} of this problem`;
   }
@@ -433,6 +455,10 @@
   }
 
   async function stopTimerAndOpenModal() {
+    if (state.timerController) {
+      state.timerController.stopAndDone();
+      return;
+    }
     recomputeElapsedFromWallTime();
     state.running = false;
     state.paused = true;
@@ -485,6 +511,7 @@
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = modalHtml(problem, elapsedSecs, info.history || [], bucketDays);
     document.documentElement.appendChild(host);
+    const mistakePicker = window.ReHashMistakeTags?.createPicker?.(shadow.getElementById("rh-mistake-picker"), []);
 
     shadow.getElementById("rh-close").addEventListener("click", closeSolvedModal);
     shadow.querySelectorAll("[data-bucket]").forEach((button) => {
@@ -509,7 +536,8 @@
           timeSecs: elapsedSecs,
           timeTaken: elapsedSecs,
           approach: shadow.getElementById("rh-approach").value.trim(),
-          mistakes: shadow.getElementById("rh-mistakes").value.trim(),
+          mistakes: (mistakePicker?.getSelected?.() || []).map((tag) => tag.label).join(", "),
+          mistakeTags: mistakePicker?.getSelected?.() || [],
           tags: problem.tags,
           site: SITE,
           difficulty: problem.difficulty,
@@ -518,6 +546,7 @@
         },
       });
       if (response?.ok || response?.success) {
+        void sendRuntimeMessage({ type: "DETECT_PATTERN", session: response.session || null });
         sessionStorage.removeItem(getTimerKey(problem.url));
         state.elapsed = 0;
         state.running = false;
@@ -534,7 +563,7 @@
   function modalHtml(problem, elapsedSecs, history, bucketDays) {
     return `
       <style>
-        .rh-overlay{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px}.rh-modal{width:min(640px,100%);max-height:88vh;overflow:auto;background:#1e1e2e;color:#cdd6f4;border:1px solid rgba(203,166,247,.25);border-radius:8px;padding:20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}.rh-heading{font-size:22px;font-weight:800;margin-bottom:4px}.rh-sub{color:#a6adc8;margin-bottom:14px}.rh-section{background:#181825;border:1px solid rgba(205,214,244,.12);border-radius:8px;padding:12px;margin-bottom:12px}.rh-history{display:grid;gap:8px}.rh-row{display:flex;justify-content:space-between;gap:12px}.rh-green{color:#a6e3a1}.rh-red{color:#f38ba8}.rh-field{width:100%;box-sizing:border-box;background:#11111b;color:#cdd6f4;border:1px solid #45475a;border-radius:8px;padding:10px;font:inherit;margin-top:6px;resize:vertical}.rh-label{display:block;margin-bottom:10px}.rh-buckets{display:flex;gap:8px;flex-wrap:wrap}.rh-chip{border:1px solid #45475a;background:#313244;color:#cdd6f4;border-radius:8px;padding:9px 12px;cursor:pointer}.rh-chip.active{border-color:#cba6f7;color:#11111b;background:#cba6f7}.rh-actions{display:flex;justify-content:flex-end;gap:10px}.rh-btn{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}.rh-save{background:#a6e3a1;color:#11111b}.rh-close{background:#313244;color:#cdd6f4}
+        .rh-overlay{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px}.rh-modal{width:min(640px,100%);max-height:88vh;overflow:auto;background:#1e1e2e;color:#cdd6f4;border:1px solid rgba(203,166,247,.25);border-radius:8px;padding:20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}.rh-heading{font-size:22px;font-weight:800;margin-bottom:4px}.rh-sub{color:#a6adc8;margin-bottom:14px}.rh-section{background:#181825;border:1px solid rgba(205,214,244,.12);border-radius:8px;padding:12px;margin-bottom:12px}.rh-history{display:grid;gap:8px}.rh-row{display:flex;justify-content:space-between;gap:12px}.rh-green{color:#a6e3a1}.rh-red{color:#f38ba8}.rh-field{width:100%;box-sizing:border-box;background:#11111b;color:#cdd6f4;border:1px solid #45475a;border-radius:8px;padding:10px;font:inherit;margin-top:6px;resize:vertical}.rh-label{display:block;margin-bottom:10px}.rh-buckets{display:flex;gap:8px;flex-wrap:wrap}.rh-chip{border:1px solid #45475a;background:#313244;color:#cdd6f4;border-radius:8px;padding:9px 12px;cursor:pointer}.rh-chip.active{border-color:#cba6f7;color:#11111b;background:#cba6f7}.rh-actions{display:flex;justify-content:flex-end;gap:10px}.rh-btn{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}.rh-save{background:#a6e3a1;color:#11111b}.rh-close{background:#313244;color:#cdd6f4}.rh-mistake-dropdown{display:none;max-height:220px;overflow:auto;background:#11111b;border:1px solid #45475a;border-radius:8px;margin-top:6px;padding:8px}.rh-mistake-category{color:#a6adc8;font-size:11px;font-weight:800;margin:8px 0 4px}.rh-mistake-option,.rh-create-custom{display:block;width:100%;text-align:left;border:0;background:transparent;color:#cdd6f4;padding:6px 8px;border-radius:6px;cursor:pointer}.rh-mistake-option:hover,.rh-create-custom:hover{background:#313244}.rh-selected-tags{display:grid;gap:8px;margin-top:8px}.rh-selected-chip{border:1px solid rgba(248,113,113,.35);background:rgba(248,113,113,.12);color:#fecaca;border-radius:999px;padding:5px 9px;cursor:pointer}.rh-muted{color:#a6adc8;font-size:12px}.rh-elaboration{margin-top:6px}
       </style>
       <div class="rh-overlay"><div class="rh-modal">
         <div class="rh-heading">Save solve session</div>
@@ -542,7 +571,7 @@
         <div class="rh-section"><strong>Previous solve history</strong><div class="rh-history">${renderHistory(history)}</div></div>
         <div class="rh-section">
           <label class="rh-label" for="rh-approach">What approach / technique did you use?<textarea id="rh-approach" class="rh-field" rows="3"></textarea></label>
-          <label class="rh-label" for="rh-mistakes">What tripped you up? Mistakes / gotchas<textarea id="rh-mistakes" class="rh-field" rows="3"></textarea></label>
+          <div class="rh-label">What tripped you up? Mistakes / gotchas<div id="rh-mistake-picker"></div></div>
         </div>
         <div class="rh-section"><strong>Next review</strong><div class="rh-buckets">${bucketDays.map((days, index) => `<button class="rh-chip ${index === 0 ? "active" : ""}" data-bucket="${days}" type="button">${days} days</button>`).join("")}<button class="rh-chip" data-bucket="done" type="button">Done ✓</button></div></div>
         <div class="rh-actions"><button class="rh-btn rh-close" id="rh-close" type="button">Close</button><button class="rh-btn rh-save" id="rh-save" type="button">Save</button></div>

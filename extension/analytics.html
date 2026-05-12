@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReHash Analytics</title>
+    <link rel="stylesheet" href="analytics.css" />
+  </head>
+  <body>
+    <aside>
+      <h1>ReHash</h1>
+      <a href="#overview">Overview</a>
+      <a href="#heatmap">Heatmap</a>
+      <a href="#distribution">Distribution</a>
+      <a href="#trend">Trend</a>
+      <a href="#topic">Topic Drill-Down</a>
+      <a href="#search">Mistake Search</a>
+      <a href="#history">Problem History</a>
+    </aside>
+    <main>
+      <section id="overview"><h2>Overview</h2><div class="stat-strip" id="overviewStats"></div></section>
+      <section id="heatmap"><h2>Mistake Heatmap</h2><div id="heatmapGrid"></div></section>
+      <section id="distribution"><div class="section-head"><h2>Mistake Distribution</h2><select id="rangeSelect"><option value="all">All Time</option><option value="30">30 Days</option><option value="7">7 Days</option></select></div><svg id="barChart" viewBox="0 0 900 340"></svg></section>
+      <section id="trend"><h2>Mistake Trend</h2><svg id="lineChart" viewBox="0 0 900 360"></svg></section>
+      <section id="topic"><div class="section-head"><h2>Topic Drill-Down</h2><select id="topicSelect"></select></div><div class="table-wrap" id="topicTable"></div></section>
+      <section id="search"><h2>Mistake Search</h2><input id="mistakeSearch" placeholder="Search mistake tags..." /><div id="searchResults"></div></section>
+      <section id="history"><div class="section-head"><h2>Problem History</h2><div><select id="historyTopic"></select><select id="historyMistake"></select><select id="historySort"><option value="date">Date</option><option value="difficulty">Difficulty</option><option value="solves">Solve count</option></select></div></div><div class="table-wrap" id="historyTable"></div></section>
+    </main>
+    <script src="analytics.js"></script>
+  </body>
+</html>
