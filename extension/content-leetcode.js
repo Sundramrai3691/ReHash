@@ -19,6 +19,7 @@
     persistId: null,
     running: false,
     startWallTime: null,
+    timerController: null,
   };
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -93,6 +94,19 @@
   }
 
   function injectWidget() {
+    if (window.ReHashTimerWidget) {
+      const problem = extractProblem();
+      state.timerController = window.ReHashTimerWidget.createTimerWidget(
+        slugFromUrl(problem.url),
+        SITE,
+        problem.title,
+        state.currentInfo?.totalSolves || 0,
+        (elapsedSecs) => {
+          void openSolvedModal(extractProblem(), elapsedSecs);
+        },
+      );
+      return;
+    }
     if (document.getElementById(WIDGET_HOST_ID)) return;
     const host = document.createElement("div");
     host.id = WIDGET_HOST_ID;
@@ -140,6 +154,10 @@
   }
 
   function updateWidgetProblem(problem) {
+    if (state.timerController) {
+      state.timerController.updateProblem(problem.title, state.currentInfo?.totalSolves || 0);
+      return;
+    }
     const title = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-title");
     if (title) title.textContent = problem.title || "Unknown problem";
   }
@@ -152,6 +170,10 @@
   }
 
   function renderSolveInfo() {
+    if (state.timerController) {
+      state.timerController.updateProblem(extractProblem().title, state.currentInfo?.totalSolves || 0);
+      return;
+    }
     const info = document.getElementById(WIDGET_HOST_ID)?.shadowRoot?.getElementById("rh-solve-info");
     if (info) info.textContent = `Solve ${state.currentInfo?.nextIteration || 1} of this problem`;
   }
@@ -428,6 +450,10 @@
   }
 
   async function stopTimerAndOpenModal() {
+    if (state.timerController) {
+      state.timerController.stopAndDone();
+      return;
+    }
     recomputeElapsedFromWallTime();
     state.running = false;
     state.paused = true;
@@ -480,6 +506,7 @@
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = modalHtml(problem, elapsedSecs, info.history || [], bucketDays);
     document.documentElement.appendChild(host);
+    const mistakePicker = window.ReHashMistakeTags?.createPicker?.(shadow.getElementById("rh-mistake-picker"), []);
 
     shadow.getElementById("rh-close").addEventListener("click", closeSolvedModal);
     shadow.querySelectorAll("[data-bucket]").forEach((button) => {
@@ -504,7 +531,8 @@
           timeSecs: elapsedSecs,
           timeTaken: elapsedSecs,
           approach: shadow.getElementById("rh-approach").value.trim(),
-          mistakes: shadow.getElementById("rh-mistakes").value.trim(),
+          mistakes: (mistakePicker?.getSelected?.() || []).map((tag) => tag.label).join(", "),
+          mistakeTags: mistakePicker?.getSelected?.() || [],
           tags: problem.tags,
           site: SITE,
           difficulty: problem.difficulty,
@@ -513,6 +541,7 @@
         },
       });
       if (response?.ok || response?.success) {
+        void sendRuntimeMessage({ type: "DETECT_PATTERN", session: response.session || null });
         sessionStorage.removeItem(getTimerKey(problem.url));
         state.elapsed = 0;
         state.running = false;
@@ -538,7 +567,7 @@
         <div class="rh-section"><strong>Previous solve history</strong><div class="rh-history">${renderHistory(history)}</div></div>
         <div class="rh-section">
           <label class="rh-label" for="rh-approach">What approach / technique did you use?<textarea id="rh-approach" class="rh-field" rows="3"></textarea></label>
-          <label class="rh-label" for="rh-mistakes">What tripped you up? Mistakes / gotchas<textarea id="rh-mistakes" class="rh-field" rows="3"></textarea></label>
+          <div class="rh-label">What tripped you up? Mistakes / gotchas<div id="rh-mistake-picker"></div></div>
         </div>
         <div class="rh-section"><strong>Next review</strong><div class="rh-buckets">${bucketDays.map((days, index) => `<button class="rh-chip ${index === 0 ? "active" : ""}" data-bucket="${days}" type="button">${days} days</button>`).join("")}<button class="rh-chip" data-bucket="done" type="button">Done ✓</button></div></div>
         <div class="rh-actions"><button class="rh-btn rh-close" id="rh-close" type="button">Close</button><button class="rh-btn rh-save" id="rh-save" type="button">Save</button></div>
